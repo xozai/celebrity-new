@@ -28,6 +28,12 @@ class TestNormalise(unittest.TestCase):
             "Œdipe": "oedipe",
             "Søren": "soren",
             "Đorđe": "dorde",
+            "½ Man": "1/2 man",
+            "Sir ½ Man": "sir 1/2 man",
+            "  ¼ Man  ": "1/4 man",
+            "Sir\t¾ Man": "sir 3/4 man",
+            "Artist©": "artist(c)",
+            "Name±": "name+/-",
         }
         for name, expected in cases.items():
             with self.subTest(name=name):

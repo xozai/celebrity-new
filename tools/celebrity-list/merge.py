@@ -14,10 +14,10 @@ VALID_CATEGORIES = frozenset(
     {"film_tv", "music", "sports", "public_figure", "fictional", "other"}
 )
 
-# PostgreSQL unaccent replacements for Latin letters that canonical
+# PostgreSQL unaccent replacements for letters and symbols that canonical
 # decomposition leaves intact. Translate after decomposition so that, for
 # example, an accented Æ or Ø gets the same base replacement.
-UNACCENT_LATIN = str.maketrans({
+UNACCENT_REPLACEMENTS = str.maketrans({
     "Æ": "AE", "æ": "ae",
     "Œ": "OE", "œ": "oe",
     "ẞ": "SS", "ß": "ss",
@@ -32,20 +32,24 @@ UNACCENT_LATIN = str.maketrans({
     "Ŧ": "T", "ŧ": "t",
     "ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl",
     "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st",
+    "¼": " 1/4", "½": " 1/2", "¾": " 3/4",
+    "©": "(C)", "®": "(R)", "±": "+/-",
+    "×": "*", "÷": "/",
 })
 
 
 def normalise(name: str) -> str:
     """
     Normalise a celebrity name for deduplication and matching:
-    lowercased, accents and combining diacritics stripped, extra whitespace collapsed.
+    transliterate, lowercase, then collapse and trim whitespace.
     """
     if not name:
         return ""
-    # Match _norm_name's whitespace handling before removing accents.
-    decomposed = unicodedata.normalize("NFD", " ".join(name.split()))
+    decomposed = unicodedata.normalize("NFD", name)
     stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
-    return unicodedata.normalize("NFC", stripped.translate(UNACCENT_LATIN)).lower()
+    transliterated = unicodedata.normalize("NFC", stripped.translate(UNACCENT_REPLACEMENTS))
+    # Some replacements, such as fractions, introduce whitespace.
+    return " ".join(transliterated.lower().split())
 
 
 def load_blocklist(filepath_or_iterable: str | Path | Iterable[str]) -> set[str]:
