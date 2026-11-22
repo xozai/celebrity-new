@@ -93,64 +93,66 @@
     </header>
 
     <p>
-      <strong>Celebrity Celebrity</strong> is a free, privacy-focused iOS party game developed by <strong>xozai</strong>. We believe party games should be fun, simple, and respect your privacy. The app requires no user account, collects no personal information, and includes no advertising or tracking SDKs.
+      <strong>Celebrity Celebrity</strong> is an iOS party game developed by <strong>xozai</strong>. We believe multiplayer party games should be fun, simple, and transparent about how data is handled. This privacy policy describes how your information is processed when playing Celebrity Celebrity.
     </p>
 
-    <h2>1. Information We Do Not Collect</h2>
+    <h2>1. Anonymous Accounts and Player Identity</h2>
     <p>
-      We do not collect or store:
-    </p>
-    <ul>
-      <li>Your name, email address, phone number, or physical location.</li>
-      <li>Device identifiers used for advertising or cross-app tracking (IDFA).</li>
-      <li>Contacts, camera photos, or personal files.</li>
-      <li>Payment or financial details (the app is completely free).</li>
-    </ul>
-
-    <h2>2. How the Game Operates (Anonymous Authentication)</h2>
-    <p>
-      To enable real-time multiplayer games across devices, the app connects to <strong>Supabase</strong> using anonymous authentication.
+      Celebrity Celebrity does not require an email address, phone number, password, or third-party social login.
     </p>
     <ul>
-      <li><strong>Anonymous Identifier:</strong> On launch, an anonymous cryptographic user ID is created solely to distinguish players within a room, assign teams, and rotate clue-givers. This identifier is never linked to any personal identity.</li>
-      <li><strong>Room Codes & Player Display Names:</strong> When you enter a room, the nickname you choose and the 4-character room code are stored temporarily in the database to coordinate the game for all players in that room.</li>
-      <li><strong>Game Slips:</strong> The celebrity names and slips submitted by players are stored temporarily in the database for the duration of the game.</li>
+      <li><strong>Anonymous Supabase Account:</strong> On your first launch, the app creates an anonymous Supabase user account. The authentication session is stored securely in your device's Keychain by the Supabase SDK so you can reconnect across app launches.</li>
+      <li><strong>Player Display Names:</strong> When you join or create a room, you enter a display name. While you may choose to enter your real name or a nickname, display names are used solely to identify you on the lobby scoreboard, team assignments, and turn history for players in that room.</li>
     </ul>
 
-    <h2>3. Data Retention and Automatic Deletion</h2>
+    <h2>2. Game Data and Access Controls</h2>
     <p>
-      All game session data is strictly temporary:
+      Multiplayer rooms are backed by Supabase with Postgres Row-Level Security (RLS) policies:
     </p>
     <ul>
-      <li>Finished games are automatically and permanently deleted within 1 hour of game completion.</li>
-      <li>Any room idle for 24 hours is automatically purged.</li>
-      <li><strong>Delete My Data:</strong> Players can delete their active session and data at any time directly in the app by selecting "Delete my data" in App Settings.</li>
+      <li><strong>Room Members Access:</strong> Room members (including players and spectators assigned to the room) can read room state, player display names, team scores, and completed turn history. No client can directly insert, update, or delete database rows.</li>
+      <li><strong>Slips and Hidden Pile:</strong> Slips entered by players during the submission phase are stored in the database for the active game session. In accordance with game rules, client direct access to the slips table is denied by row-level security. The current slip is returned strictly and atomically only to the active clue-giver via secure SQL functions; guessers, opponents, and spectators cannot view unrevealed slips.</li>
     </ul>
 
-    <h2>4. Third-Party Data and Attributions</h2>
+    <h2>3. Live Wikipedia Search Autocomplete</h2>
     <p>
-      To help players discover names during slip submission, the app provides celebrity recommendations sourced from public databases:
+      While typing slip submissions, if the curated recommendation list returns fewer than 6 suggestions, the app sends typed prefixes directly to the Wikimedia API (Wikipedia search) to retrieve long-tail suggestions. These queries transmit only the characters typed, include a descriptive User-Agent, are debounced and cached in memory on device, and do not transmit user or device identifiers.
+    </p>
+
+    <h2>4. Data Retention and Cleanup</h2>
+    <p>
+      Game session data is temporary and automatically cleaned up:
+    </p>
+    <ul>
+      <li><strong>Finished Rooms:</strong> Finished rooms are automatically deleted by a scheduled database cleanup job once they are older than one hour.</li>
+      <li><strong>Idle Rooms:</strong> Any room idle without activity for 24 hours is automatically purged.</li>
+      <li><strong>Delete My Data:</strong> Players can delete their active user data and session at any time directly in the app by selecting "Delete my data" in the app settings screen.</li>
+    </ul>
+
+    <h2>5. Third-Party Data Sources and Attributions</h2>
+    <p>
+      Celebrity suggestions are powered by curated and live public data:
     </p>
     <ul>
       <li>
-        <strong>Wikipedia &amp; Wikidata:</strong> Popular figures and descriptions are provided via Wikimedia APIs under the
-        <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">Creative Commons Attribution-ShareAlike License</a>.
+        <strong>Wikipedia:</strong> Content and article summaries courtesy of Wikipedia, licensed under the
+        <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">Creative Commons Attribution-ShareAlike 3.0/4.0 License</a>.
+      </li>
+      <li>
+        <strong>Wikidata:</strong> Structured entity descriptions courtesy of Wikidata, made available under the
+        <a href="https://creativecommons.org/publicdomain/zero/1.0/" target="_blank" rel="noopener">Creative Commons CC0 1.0 Universal Public Domain Dedication</a>.
       </li>
       <li>
         <div class="credit-box">
-          <strong>IMDb:</strong> Information courtesy of IMDb (<a href="https://www.imdb.com" target="_blank" rel="noopener">https://www.imdb.com</a>). Used with permission.
+          <!-- TODO(user): verify against IMDb's current licensing page -->
+          Information courtesy of IMDb (<a href="https://www.imdb.com" target="_blank" rel="noopener">https://www.imdb.com</a>). Used with permission.
         </div>
       </li>
     </ul>
 
-    <h2>5. Security</h2>
-    <p>
-      All network communication between your device and the Supabase backend is encrypted using Transport Layer Security (TLS/HTTPS). Row-level security policies ensure only players in an active room can read game status, and slips remain hidden from guessers until drawn.
-    </p>
-
     <h2>6. Contact</h2>
     <p>
-      If you have questions about this privacy policy, please open an issue or reach out via our GitHub repository at
+      For questions regarding this privacy policy or game data handling, please visit our repository at
       <a href="https://github.com/xozai/celebrity-new" target="_blank" rel="noopener">xozai/celebrity-new</a>.
     </p>
 

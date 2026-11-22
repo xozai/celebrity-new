@@ -96,14 +96,6 @@
       background-color: var(--accent-hover);
       transform: translateY(-1px);
     }
-    .btn-secondary {
-      background-color: transparent;
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
-    .btn-secondary:hover {
-      background-color: rgba(255, 255, 255, 0.05);
-    }
     .help-text {
       font-size: 0.85rem;
       color: var(--text-muted);
@@ -122,52 +114,40 @@
       <div class="code-value" id="roomCode">----</div>
     </div>
 
-    <a href="#" id="openAppBtn" class="btn btn-primary" style="display: none;">
-      Open in Celebrity Celebrity
-    </a>
-
-    <a href="APP_STORE_URL" class="btn btn-secondary">
+    <!-- TODO(release): Substitute APP_STORE_URL with actual App Store product URL upon release -->
+    <a href="APP_STORE_URL" class="btn btn-primary">
       Download on the App Store
     </a>
 
     <p class="help-text">
-      Celebrity Celebrity requires iOS 17 or later on iPhone. If you already have the app installed, enter the room code to join.
+      Celebrity Celebrity requires iOS 17 or later on iPhone. If the app is installed, tapping an invite link opens the room directly via Universal Links. Otherwise, download the app above and enter the room code to join.
     </p>
   </div>
 
   <script>
     (function() {
-      // Extract room code from path /join/CODE or ?code=CODE
+      // Validate strictly against canonical server alphabet: ABCDEFGHJKLMNPQRSTUVWXYZ23456789 (Finding 9)
+      var ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
       var path = window.location.pathname;
-      var match = path.match(/\/join\/([A-Za-z0-9]{4})/i);
-      var code = match ? match[1].toUpperCase() : null;
 
-      if (!code) {
-        var params = new URLSearchParams(window.location.search);
-        code = params.get('code');
-        if (code) {
-          code = code.toUpperCase().trim();
+      // Match canonical /join/CODE or /join/CODE/ path with no query parameters or custom schemes
+      var match = path.match(/^\/join\/([A-Z0-9]{4})\/?$/);
+      if (!match) {
+        return;
+      }
+
+      var candidate = match[1];
+      for (var i = 0; i < candidate.length; i++) {
+        if (ALPHABET.indexOf(candidate.charAt(i)) === -1) {
+          return;
         }
       }
 
-      if (code) {
-        var roomCodeEl = document.getElementById('roomCode');
-        var codeBoxEl = document.getElementById('codeBox');
-        var openAppBtn = document.getElementById('openAppBtn');
-
-        roomCodeEl.textContent = code;
+      var codeBoxEl = document.getElementById('codeBox');
+      var roomCodeEl = document.getElementById('roomCode');
+      if (codeBoxEl && roomCodeEl) {
+        roomCodeEl.textContent = candidate;
         codeBoxEl.style.display = 'block';
-
-        // Deep link custom scheme
-        var appUrl = 'celebrity://join/' + code;
-        openAppBtn.href = appUrl;
-        openAppBtn.style.display = 'block';
-
-        // Attempt redirect to app if on iOS
-        var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-        if (isIOS) {
-          window.location.href = appUrl;
-        }
       }
     })();
   </script>
