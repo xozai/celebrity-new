@@ -1,0 +1,38 @@
+{
+  "room": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "code": "AB24",
+    "host_id": "00000000-0000-0000-0000-000000000002",
+    "phase": "playing",
+    "finished_at": null,
+    "round": 1,
+    "team_names": ["Stars", "Comets"],
+    "slips_per_player": 3,
+    "turn_seconds": 60,
+    "submission_seconds": 120,
+    "skip_mode": "one_per_turn",
+    "suggestions_enabled": false,
+    "submission_deadline": "2026-11-22T18:02:00.000000+00:00",
+    "current_team": 1,
+    "turn_idx": [1, 0],
+    "turn_player_id": "00000000-0000-0000-0000-000000000003",
+    "turn_ends_at": null,
+    "turn_got": 0,
+    "turn_skips": 0,
+    "pile_count": 10,
+    "scores": [[2, 0], [0, 0], [0, 0]],
+    "last_activity_at": "2026-11-22T18:01:00.000000+00:00",
+    "created_at": "2026-11-22T17:55:00.000000+00:00"
+  },
+  "players": [
+    {"room_id":"00000000-0000-0000-0000-000000000001","user_id":"00000000-0000-0000-0000-000000000002","name":"Alex","team":0,"role":"player","seat":1,"submitted":true,"last_seen_at":"2026-11-22T18:01:00.000000+00:00"},
+    {"room_id":"00000000-0000-0000-0000-000000000001","user_id":"00000000-0000-0000-0000-000000000003","name":"Blair","team":1,"role":"player","seat":2,"submitted":true,"last_seen_at":"2026-11-22T18:01:00.000000+00:00"},
+    {"room_id":"00000000-0000-0000-0000-000000000001","user_id":"00000000-0000-0000-0000-000000000005","name":"Casey","team":0,"role":"player","seat":3,"submitted":true,"last_seen_at":"2026-11-22T18:01:00.000000+00:00"},
+    {"room_id":"00000000-0000-0000-0000-000000000001","user_id":"00000000-0000-0000-0000-000000000006","name":"Drew","team":1,"role":"player","seat":4,"submitted":true,"last_seen_at":"2026-11-22T18:01:00.000000+00:00"},
+    {"room_id":"00000000-0000-0000-0000-000000000001","user_id":"00000000-0000-0000-0000-000000000007","name":"Ellis","team":null,"role":"spectator","seat":5,"submitted":false,"last_seen_at":"2026-11-22T18:01:00.000000+00:00"}
+  ],
+  "turns": [
+    {"id":26,"room_id":"00000000-0000-0000-0000-000000000001","round":1,"team":0,"player_id":null,"player_name":"Former player","guessed":["Beyoncé","Beyoncé"],"skipped":1,"ended_at":"2026-11-22T18:01:00.000000+00:00"}
+  ],
+  "server_now": "2026-11-22T18:01:00.123456+00:00"
+}

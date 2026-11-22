@@ -1,0 +1,105 @@
+{
+    "room": {
+        "id": "c7f4a8b2-2d3d-4edd-98da-0409da432c7b",
+        "code": "S7EN",
+        "phase": "playing",
+        "round": 1,
+        "scores": [
+            [
+                2,
+                1
+            ],
+            [
+                0,
+                0
+            ],
+            [
+                0,
+                0
+            ]
+        ],
+        "host_id": "11111111-1111-1111-1111-111111111111",
+        "turn_got": 1,
+        "turn_idx": [
+            1,
+            0
+        ],
+        "skip_mode": "one_per_turn",
+        "created_at": "2026-11-22T18:14:20.22535+00:00",
+        "pile_count": 9,
+        "team_names": [
+            "The Legends",
+            "Night Owls"
+        ],
+        "turn_skips": 0,
+        "finished_at": null,
+        "current_team": 1,
+        "turn_ends_at": "2026-11-22T18:15:20.281766+00:00",
+        "turn_seconds": 60,
+        "turn_player_id": "33333333-3333-3333-3333-333333333333",
+        "last_activity_at": "2026-11-22T18:14:20.22535+00:00",
+        "slips_per_player": 3,
+        "submission_seconds": 120,
+        "submission_deadline": "2026-11-22T18:16:20.264941+00:00",
+        "suggestions_enabled": true
+    },
+    "turns": [
+        {
+            "id": 36,
+            "team": 0,
+            "round": 1,
+            "guessed": [
+                "Sherlock Holmes",
+                "Beyoncé"
+            ],
+            "room_id": "c7f4a8b2-2d3d-4edd-98da-0409da432c7b",
+            "skipped": 1,
+            "ended_at": "2026-11-22T18:14:20.279008+00:00",
+            "player_id": "11111111-1111-1111-1111-111111111111",
+            "player_name": "Ann"
+        }
+    ],
+    "players": [
+        {
+            "name": "Ann",
+            "role": "player",
+            "seat": 1,
+            "team": 0,
+            "room_id": "c7f4a8b2-2d3d-4edd-98da-0409da432c7b",
+            "user_id": "11111111-1111-1111-1111-111111111111",
+            "submitted": true,
+            "last_seen_at": "2026-11-22T18:14:20.22535+00:00"
+        },
+        {
+            "name": "Bob",
+            "role": "player",
+            "seat": 2,
+            "team": 0,
+            "room_id": "c7f4a8b2-2d3d-4edd-98da-0409da432c7b",
+            "user_id": "22222222-2222-2222-2222-222222222222",
+            "submitted": true,
+            "last_seen_at": "2026-11-22T18:14:20.22535+00:00"
+        },
+        {
+            "name": "Cy",
+            "role": "player",
+            "seat": 3,
+            "team": 1,
+            "room_id": "c7f4a8b2-2d3d-4edd-98da-0409da432c7b",
+            "user_id": "33333333-3333-3333-3333-333333333333",
+            "submitted": true,
+            "last_seen_at": "2026-11-22T18:14:20.22535+00:00"
+        },
+        {
+            "name": "Di",
+            "role": "player",
+            "seat": 4,
+            "team": 1,
+            "room_id": "c7f4a8b2-2d3d-4edd-98da-0409da432c7b",
+            "user_id": "44444444-4444-4444-4444-444444444444",
+            "submitted": true,
+            "last_seen_at": "2026-11-22T18:14:20.22535+00:00"
+        }
+    ],
+    "server_now": "2026-11-22T18:14:20.284608+00:00"
+}

@@ -1,4 +1,5 @@
-/// Placeholder until the game model lands (docs/PLAN.md, Phase 2).
+/// Shared constants for the game.
+
 public enum CelebrityCore {
     /// Say Anything, One Word, Charades.
     public static let roundCount = 3
