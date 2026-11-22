@@ -46,8 +46,22 @@ class TestImdbSource(unittest.TestCase):
         )
         self.assertEqual(len(celebrities), 10)
 
-        # Check top candidate has highest popularity 1.0
+        # Expected top identities and ordering based on summed votes (Finding 16):
+        # 1. Christopher Nolan (1.8M total votes)
+        # 2. Harvey Keitel (1.66M total votes)
+        # 3. Matt Damon
+        self.assertEqual(celebrities[0]["name"], "Christopher Nolan")
         self.assertEqual(celebrities[0]["popularity"], 1.0)
+        self.assertEqual(celebrities[1]["name"], "Harvey Keitel")
+        self.assertEqual(celebrities[2]["name"], "Matt Damon")
+
+        # Verify that candidate with multiple titles whose sum exceeds single-title candidate beats them:
+        # Cillian Murphy (1,054,000 votes across 4 titles) beats Keanu Reeves (950,000 votes on The Matrix),
+        # even though Keanu's individual title has higher votes than any single title of Cillian's.
+        cillian = next(c for c in celebrities if c["name"] == "Cillian Murphy")
+        keanu = next(c for c in celebrities if c["name"] == "Keanu Reeves")
+        self.assertGreater(cillian["popularity"], keanu["popularity"])
+
         # All returned rows must have required fields
         for c in celebrities:
             self.assertIn("name", c)
