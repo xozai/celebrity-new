@@ -31,7 +31,7 @@ grant execute on function pg_temp.act_anon() to public;
 create temp table ctx (k text primary key, v text);
 grant all on ctx to public;
 
-select plan(36);
+select plan(39);
 
 -- create_room ---------------------------------------------------------------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
@@ -151,8 +151,12 @@ select pg_temp.act_as('00000000-0000-0000-0000-000000000003');
 select public.leave_room();
 select pg_temp.act_admin();
 select is(
-  (select host_id from public.rooms where code = (select v from ctx where k = 'code_a')),
-  null, 'an empty room has no host');
+  (select count(*)::int from public.rooms where code = (select v from ctx where k = 'code_a')),
+  0, 'a room is deleted when its last member leaves');
+select pg_temp.act_as('00000000-0000-0000-0000-000000000003');
+select throws_ok(
+  format($$ select public.join_room(%L, 'Cy') $$, (select v from ctx where k = 'code_a')),
+  'P0001', 'room_not_found', 'an abandoned room code cannot be joined');
 
 -- Joining a second room leaves the first one.
 select pg_temp.act_as('00000000-0000-0000-0000-000000000005');
@@ -172,8 +176,16 @@ select is(
 select pg_temp.act_as('00000000-0000-0000-0000-000000000009');
 select public.create_room('Zed') from generate_series(1, 5);
 select throws_ok($$ select public.create_room('Zed') $$, 'P0001', 'rate_limited', 'sixth room in an hour rejected');
+-- The limit does not depend on the rooms still existing.
+select public.leave_room();
 select pg_temp.act_admin();
-update public.rooms set created_at = now() - interval '2 hours' where created_by = '00000000-0000-0000-0000-000000000009';
+select is(
+  (select count(*)::int from public.rooms where created_by = '00000000-0000-0000-0000-000000000009'), 0,
+  'the abandoned rooms are gone');
+select pg_temp.act_as('00000000-0000-0000-0000-000000000009');
+select throws_ok($$ select public.create_room('Zed') $$, 'P0001', 'rate_limited', 'and the limit still holds');
+select pg_temp.act_admin();
+update public.room_creations set created_at = now() - interval '2 hours' where user_id = '00000000-0000-0000-0000-000000000009';
 select pg_temp.act_as('00000000-0000-0000-0000-000000000009');
 select lives_ok($$ select public.create_room('Zed') $$, 'old rooms no longer count against the limit');
 

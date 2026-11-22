@@ -57,6 +57,11 @@ begin
   delete from public.players where room_id = p_room_id and user_id = p_user_id;
   update public.slips set author_id = null where room_id = p_room_id and author_id = p_user_id;
 
+  if not exists (select 1 from public.players where room_id = p_room_id) then
+    delete from public.rooms where id = p_room_id;
+    return;
+  end if;
+
   if v_was_host then
     update public.rooms
        set host_id = (select p.user_id from public.players p
@@ -143,8 +148,8 @@ declare
 begin
   perform public._lock_user(v_uid);
 
-  if (select count(*) from public.rooms
-       where created_by = v_uid and created_at > now() - interval '1 hour') >= 5 then
+  if (select count(*) from public.room_creations
+       where user_id = v_uid and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'rate_limited';
   end if;
 
@@ -168,6 +173,7 @@ begin
 
   insert into public.players (room_id, user_id, name, seat)
   values (v_room_id, v_uid, v_name, 1);
+  insert into public.room_creations (user_id) values (v_uid);
 
   return public._snapshot(v_room_id);
 end;

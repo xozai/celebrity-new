@@ -68,10 +68,15 @@ begin
 end $$;
 grant execute on function pg_temp.play_turn(uuid, int, boolean) to public;
 
+create function pg_temp.room_of(p_user uuid) returns uuid language sql security definer as $$
+  select room_id from public.players where user_id = p_user
+$$;
+grant execute on function pg_temp.room_of(uuid) to public;
+
 create temp table ctx (k text primary key, v text);
 grant all on ctx to public;
 
-select plan(34);
+select plan(37);
 
 -- Game 1: users 1-4 ------------------------------------------------------------------------------------
 select pg_temp.new_game(0);
@@ -157,6 +162,21 @@ select row_eq(
 select is((select count(*)::int from public.turns), 5, 'five turns are in the history');
 select is((select array_agg(round order by id) from public.turns), array[1, 2, 2, 3, 3]::smallint[], 'turns are tagged with their round');
 
+-- The finish time is fixed when the game ends; later activity in the room does not move it (review finding 12).
+insert into ctx values ('fin', (select finished_at::text from public.rooms where id = pg_temp.room_of(pg_temp.u(1))));
+insert into ctx values ('code', (select code from public.rooms where id = pg_temp.room_of(pg_temp.u(1))));
+select isnt((select v from ctx where k = 'fin'), null, 'finishing the game stamps finished_at');
+select pg_temp.act_admin();
+update public.rooms set finished_at = now() - interval '30 minutes' where id = pg_temp.room_of(pg_temp.u(1));
+update ctx set v = (select finished_at::text from public.rooms where id = pg_temp.room_of(pg_temp.u(1))) where k = 'fin';
+select pg_temp.act_as(pg_temp.u(5));
+select public.join_room((select v from ctx where k = 'code'), 'Late');
+select public.leave_room();
+select pg_temp.act_admin();
+select is(
+  (select finished_at::text from public.rooms where id = pg_temp.room_of(pg_temp.u(1))), (select v from ctx where k = 'fin'),
+  'joining and leaving after the game does not change finished_at');
+
 select pg_temp.act_as(pg_temp.u(1));
 select throws_ok($$ select public.start_next_round() $$, 'P0001', 'wrong_phase', 'no round 4');
 
@@ -173,6 +193,7 @@ select row_eq(
   'reset_room returns the room to a clean lobby');
 select is(
   (select count(*)::int from public.slips) + (select count(*)::int from public.turns), 0, 'reset_room clears slips and history');
+select is((select finished_at from public.rooms where id = pg_temp.room_of(pg_temp.u(1))), null, 'reset_room clears finished_at');
 select row_eq(
   $$ select count(*)::int, count(*) filter (where team = 0)::int, count(*) filter (where team = 1)::int,
             count(*) filter (where role = 'player')::int, count(*) filter (where submitted)::int

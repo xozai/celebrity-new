@@ -21,7 +21,7 @@ begin
 end $$;
 grant execute on function pg_temp.act_anon() to public;
 
-select plan(22);
+select plan(23);
 
 -- Fixtures, written as the table owner ---------------------------------------------
 insert into public.rooms (id, code, host_id) values
@@ -57,6 +57,7 @@ select is((select count(*)::int from public.players), 0, 'non-member sees no pla
 select is((select count(*)::int from public.turns), 0, 'non-member sees no turns');
 
 -- Signed-out callers have no access at all -----------------------------------------------------
+select throws_ok('select * from public.room_creations', '42501', null, 'members cannot read the room-creation log');
 select pg_temp.act_anon();
 select throws_ok('select * from public.rooms', '42501', null, 'anon cannot select rooms');
 

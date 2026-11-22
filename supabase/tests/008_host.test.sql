@@ -113,7 +113,7 @@ begin
 end $$;
 grant execute on function pg_temp.play_turn(uuid, int, boolean) to public;
 
-select plan(61);
+select plan(62);
 
 -- A. Lobby room, users 1-4 ---------------------------------------------------------------------------------
 select pg_temp.new_game(0, 0);
@@ -302,6 +302,8 @@ select row_eq(
   row(2, 2), 'after a completed turn''s player deletes too, no turn names anyone');
 select is(
   (select scores -> 0 from public.rooms where id = pg_temp.room_of(pg_temp.u(122))), '[1,1]'::jsonb, 'scores are unchanged');
+select is(
+  (select count(*)::int from public.room_creations where user_id = pg_temp.u(121)), 0, 'delete_my_data clears the room-creation log for that user');
 
 -- I. Rotation survives people leaving (review finding 8) -------------------------------------------------------------------
 -- Mid-round: Ann (first of three) has played and leaves; the next turn for that team is Bob, not Cy.

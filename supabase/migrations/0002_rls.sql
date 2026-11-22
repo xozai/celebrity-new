@@ -11,13 +11,14 @@ alter default privileges for role postgres
 alter default privileges for role postgres in schema public
   revoke execute on functions from anon, authenticated;
 
-revoke all on public.rooms, public.players, public.slips, public.turns from anon, authenticated;
+revoke all on public.rooms, public.players, public.slips, public.turns, public.room_creations from anon, authenticated;
 grant select on public.rooms, public.players, public.turns to authenticated;
 
 alter table public.rooms enable row level security;
 alter table public.players enable row level security;
 alter table public.slips enable row level security;
 alter table public.turns enable row level security;
+alter table public.room_creations enable row level security;
 
 -- Membership check used by the policies. security definer so the players policy does not recurse.
 create function public.is_room_member(p_room_id uuid)

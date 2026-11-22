@@ -61,6 +61,13 @@ begin
 
   delete from public.players where room_id = p_room_id and user_id = p_user_id;
 
+  -- The last one out closes the room. A deleted room cannot be rejoined and does not leave a
+  -- hostless shell behind (the creation quota lives in room_creations, so it is not affected).
+  if not exists (select 1 from public.players where room_id = p_room_id) then
+    delete from public.rooms where id = p_room_id;
+    return;
+  end if;
+
   if v_room.host_id = p_user_id then
     update public.rooms
        set host_id = (select p.user_id from public.players p
@@ -229,6 +236,7 @@ begin
 
   update public.slips set author_id = null where author_id = v_uid;
   update public.rooms set created_by = null where created_by = v_uid;
+  delete from public.room_creations where user_id = v_uid;
   -- Scores and results stay; the name and identity do not.
   update public.turns set player_id = null, player_name = 'Former player' where player_id = v_uid;
   delete from auth.users where id = v_uid and is_anonymous;

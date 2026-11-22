@@ -33,6 +33,8 @@ create table public.rooms (
   scores              jsonb not null default '[[0,0],[0,0],[0,0]]'::jsonb
                         check (jsonb_typeof(scores) = 'array'),
   last_activity_at    timestamptz not null default now(),
+  -- Set when the game ends, cleared by reset_room. Cleanup keeps a finished room for an hour from here.
+  finished_at         timestamptz,
   created_at          timestamptz not null default now()
 );
 
@@ -87,3 +89,12 @@ create table public.turns (
 );
 
 create index turns_room_idx on public.turns (room_id, id);
+
+-- One row per room created, so the 5-rooms-per-hour limit survives the room being deleted.
+-- No client can read it. cleanup_rooms() prunes rows older than the limit window.
+create table public.room_creations (
+  user_id    uuid not null,
+  created_at timestamptz not null default now()
+);
+
+create index room_creations_user_idx on public.room_creations (user_id, created_at);
