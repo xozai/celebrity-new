@@ -17,7 +17,7 @@ from typing import Any
 
 from merge import load_blocklist, merge, normalise
 from sources_imdb import stream_imdb_celebrities
-from sources_wikipedia import fetch_wikipedia_celebrities
+from sources_wikipedia import fetch_wikipedia_celebrities, get_default_months
 
 IMDB_FILES = {
     "name.basics.tsv.gz": "https://datasets.imdbws.com/name.basics.tsv.gz",
@@ -38,17 +38,30 @@ def format_sources_array(sources: list[str]) -> str:
     return f"{{{','.join(clean)}}}"
 
 
-def download_imdb_files(data_dir: Path) -> dict[str, Path]:
-    """Download IMDb dataset files to data_dir if not already present."""
+def download_imdb_files(data_dir: Path, refresh: bool = False) -> dict[str, Path]:
+    """
+    Download IMDb dataset files to data_dir if not present or refresh=True.
+    Downloads to a temporary file and atomically renames on success (Finding 14).
+    """
     data_dir.mkdir(parents=True, exist_ok=True)
     paths = {}
     for filename, url in IMDB_FILES.items():
         dest = data_dir / filename
         paths[filename] = dest
-        if not dest.exists():
-            print(f"Downloading {filename} from {url}...")
-            urllib.request.urlretrieve(url, dest)
-            print(f"Downloaded {filename}.")
+        if dest.exists() and not refresh:
+            continue
+
+        print(f"Downloading {filename} from {url}...")
+        tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
+        try:
+            urllib.request.urlretrieve(url, tmp_dest)
+            tmp_dest.replace(dest)
+            print(f"Downloaded and verified {filename}.")
+        except Exception:
+            if tmp_dest.exists():
+                tmp_dest.unlink()
+            raise
+
     return paths
 
 
@@ -115,6 +128,11 @@ def main() -> None:
         default=3000,
         help="Number of top IMDb individuals to keep",
     )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Force re-download of IMDb dataset files even if cached",
+    )
     args = parser.parse_args()
 
     # 1. Blocklist
@@ -122,14 +140,15 @@ def main() -> None:
     blocklist = load_blocklist(args.blocklist)
     print(f"Loaded {len(blocklist)} blocklisted entries.")
 
-    # 2. Wikipedia candidates
+    # 2. Wikipedia candidates (Finding 14: pass requested months)
     print(f"Fetching Wikipedia candidates for past {args.wiki_months} months...")
-    wiki_candidates = fetch_wikipedia_celebrities()
+    months = get_default_months(args.wiki_months)
+    wiki_candidates = fetch_wikipedia_celebrities(months=months)
     print(f"Fetched {len(wiki_candidates)} Wikipedia candidates.")
 
-    # 3. IMDb candidates
+    # 3. IMDb candidates (Finding 14: atomic download with optional refresh)
     print(f"Ensuring IMDb datasets in {args.data_dir}...")
-    imdb_paths = download_imdb_files(args.data_dir)
+    imdb_paths = download_imdb_files(args.data_dir, refresh=args.refresh)
     print("Streaming IMDb candidates...")
     imdb_candidates = stream_imdb_celebrities(
         names_path=imdb_paths["name.basics.tsv.gz"],
