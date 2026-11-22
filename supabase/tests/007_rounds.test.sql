@@ -56,7 +56,7 @@ begin
   perform pg_temp.act_as(p_user);
   perform public.start_turn();
   for i in 1..n loop
-    perform public.got_it();
+    perform public.got_it(pg_temp.tok());
   end loop;
   if expire then
     perform pg_temp.act_admin();
@@ -72,6 +72,13 @@ create function pg_temp.room_of(p_user uuid) returns uuid language sql security 
   select room_id from public.players where user_id = p_user
 $$;
 grant execute on function pg_temp.room_of(uuid) to public;
+
+-- The token of the slip currently being shown in the caller's room (what a client got back from its last draw).
+create function pg_temp.tok() returns uuid language sql security definer as $$
+  select s.draw_token from public.slips s
+   where s.is_current and s.room_id = (select room_id from public.players where user_id = auth.uid())
+$$;
+grant execute on function pg_temp.tok() to public;
 
 create temp table ctx (k text primary key, v text);
 grant all on ctx to public;
@@ -89,7 +96,7 @@ select pg_temp.play_turn(pg_temp.u(1), 3, false);
 select pg_temp.act_admin();
 select is((select pile_count from public.rooms where id = (select room_id from public.players where user_id = pg_temp.u(1))), 1, 'setup: one slip left');
 select pg_temp.act_as(pg_temp.u(1));
-select is(public.got_it(), null, 'got_it returns null when the pile is empty');
+select is(public.got_it(pg_temp.tok()), null, 'got_it returns null when the pile is empty');
 select pg_temp.act_admin();
 select row_eq(
   $$ select phase, round, pile_count, turn_player_id, turn_ends_at, turn_got

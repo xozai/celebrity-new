@@ -64,6 +64,9 @@ create table public.slips (
   in_pile          boolean not null default false,
   pile_order       double precision,
   is_current       boolean not null default false,
+  -- Unique to each draw of a slip (including a redraw of the same slip). Only the clue-giver is
+  -- ever handed it, in the RPC result; this table is not readable by clients.
+  draw_token       uuid,
   -- Per-turn bookkeeping, cleared when the turn is written to public.turns.
   guessed_at       timestamptz,
   skipped_in_turn  boolean not null default false

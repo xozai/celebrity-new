@@ -6,7 +6,8 @@
 --
 -- _end_round(room_id) is called by got_it when the pile empties. It is defined in 0007.
 
--- Marks the next slip in the pile as current and returns it as {"id", "name"}, or null if none. ----
+-- Marks the next slip in the pile as current, gives that draw a fresh token, and returns
+-- {"id", "name", "token"}, or null if the pile has nothing left. ----
 create function public._draw_slip(p_room_id uuid)
 returns jsonb
 language plpgsql
@@ -17,7 +18,8 @@ declare
   v_slip public.slips;
 begin
   update public.slips s
-     set is_current = true
+     set is_current = true,
+         draw_token = gen_random_uuid()
    where s.id = (select id from public.slips
                   where room_id = p_room_id and in_pile and not is_current
                   order by pile_order, id
@@ -27,7 +29,7 @@ begin
   if v_slip.id is null then
     return null;
   end if;
-  return jsonb_build_object('id', v_slip.id, 'name', v_slip.name);
+  return jsonb_build_object('id', v_slip.id, 'name', v_slip.name, 'token', v_slip.draw_token);
 end;
 $$;
 
@@ -38,7 +40,7 @@ stable
 security definer
 set search_path = public, pg_temp
 as $$
-  select jsonb_build_object('id', s.id, 'name', s.name)
+  select jsonb_build_object('id', s.id, 'name', s.name, 'token', s.draw_token)
     from public.slips s where s.room_id = p_room_id and s.is_current;
 $$;
 
@@ -73,6 +75,7 @@ begin
   -- The unfinished slip goes back into the pile at a new random position.
   update public.slips
      set is_current = false,
+         draw_token = null,
          pile_order = case when in_pile then random() else pile_order end,
          guessed_at = null,
          skipped_in_turn = false
@@ -153,7 +156,7 @@ end;
 $$;
 
 -- got_it: score the current slip, return the next one (null when the pile is empty). ---------------
-create function public.got_it(p_slip_id uuid default null)
+create function public.got_it(p_token uuid)
 returns jsonb
 language plpgsql
 security definer
@@ -163,15 +166,20 @@ declare
   v_room public.rooms := public._lock_running_turn();
   v_left int;
 begin
-  -- Bound to the slip the clue-giver saw: a duplicate or stale request changes nothing.
-  if p_slip_id is not null and p_slip_id is distinct from
-       (select id from public.slips where room_id = v_room.id and is_current) then
+  if p_token is null then
+    raise exception 'invalid_token';
+  end if;
+  -- The token belongs to one draw. A duplicate, a retry or a late request carries an older token:
+  -- it changes nothing and gets the current slip back, with its current token.
+  if p_token is distinct from
+       (select draw_token from public.slips where room_id = v_room.id and is_current) then
     return public._current_slip_json(v_room.id);
   end if;
 
   update public.slips
      set in_pile = false,
          is_current = false,
+         draw_token = null,
          skipped_in_turn = false,
          guessed_at = clock_timestamp()
    where room_id = v_room.id and is_current;
@@ -197,7 +205,7 @@ end;
 $$;
 
 -- skip_slip: the slip stays in the pile but moves to the back; returns the next one. -----------------
-create function public.skip_slip(p_slip_id uuid default null)
+create function public.skip_slip(p_token uuid)
 returns jsonb
 language plpgsql
 security definer
@@ -206,17 +214,22 @@ as $$
 declare
   v_room public.rooms := public._lock_running_turn();
 begin
+  if p_token is null then
+    raise exception 'invalid_token';
+  end if;
+  -- Staleness first: a retry of a skip that was already accepted must not hit the skip limit.
+  if p_token is distinct from
+       (select draw_token from public.slips where room_id = v_room.id and is_current) then
+    return public._current_slip_json(v_room.id);
+  end if;
   if v_room.skip_mode = 'off'
      or (v_room.skip_mode = 'one_per_turn' and v_room.turn_skips >= 1) then
     raise exception 'skip_not_allowed';
   end if;
-  if p_slip_id is not null and p_slip_id is distinct from
-       (select id from public.slips where room_id = v_room.id and is_current) then
-    return public._current_slip_json(v_room.id);
-  end if;
 
   update public.slips
      set is_current = false,
+         draw_token = null,
          skipped_in_turn = true,
          pile_order = coalesce((select max(pile_order) from public.slips
                                  where room_id = v_room.id and in_pile), 0) + 1
@@ -259,7 +272,7 @@ begin
   if not found then
     return null;
   end if;
-  return jsonb_build_object('id', v_slip.id, 'name', v_slip.name);
+  return jsonb_build_object('id', v_slip.id, 'name', v_slip.name, 'token', v_slip.draw_token);
 end;
 $$;
 

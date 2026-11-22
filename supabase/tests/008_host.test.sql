@@ -102,7 +102,7 @@ begin
   perform pg_temp.act_as(p_user);
   perform public.start_turn();
   for i in 1..n loop
-    perform public.got_it();
+    perform public.got_it(pg_temp.tok());
   end loop;
   if expire then
     perform pg_temp.act_admin();
@@ -112,6 +112,13 @@ begin
   end if;
 end $$;
 grant execute on function pg_temp.play_turn(uuid, int, boolean) to public;
+
+-- The token of the slip currently being shown in the caller's room (what a client got back from its last draw).
+create function pg_temp.tok() returns uuid language sql security definer as $$
+  select s.draw_token from public.slips s
+   where s.is_current and s.room_id = (select room_id from public.players where user_id = auth.uid())
+$$;
+grant execute on function pg_temp.tok() to public;
 
 select plan(68);
 
@@ -192,7 +199,7 @@ select is(
 select pg_temp.new_game(40, 4);
 select pg_temp.act_as(pg_temp.u(41));
 select public.start_turn();
-select public.got_it();
+select public.got_it(pg_temp.tok());
 select public.leave_room();
 select pg_temp.act_admin();
 select row_eq(
@@ -282,7 +289,7 @@ select pg_temp.new_game(120, 4);
 select pg_temp.play_turn(pg_temp.u(121), 1, true);
 select pg_temp.act_as(pg_temp.u(123));
 select public.start_turn();
-select public.got_it();
+select public.got_it(pg_temp.tok());
 select public.delete_my_data();   -- during their own running turn
 select pg_temp.act_admin();
 select row_eq(
