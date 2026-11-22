@@ -32,20 +32,22 @@ def normalise(name: str) -> str:
 def load_blocklist(filepath_or_iterable: str | Path | Iterable[str]) -> set[str]:
     """
     Load a blocklist of names to never recommend.
-    Accepts a filepath or iterable of strings, normalises each name.
+    - If a string or Path is provided, it is treated as a required file path.
+      Raises FileNotFoundError if the file does not exist.
+    - If an iterable (set, list, etc.) is provided, in-memory names are normalised.
     """
-    blocked = set()
+    blocked: set[str] = set()
+
     if isinstance(filepath_or_iterable, (str, Path)):
         path = Path(filepath_or_iterable)
-        if path.is_file():
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        blocked.add(normalise(line))
-        else:
-            # Might be a single string name or non-existent file
-            blocked.add(normalise(str(filepath_or_iterable)))
+        if not path.is_file():
+            raise FileNotFoundError(f"Blocklist file not found: {path}")
+
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    blocked.add(normalise(line))
     else:
         for item in filepath_or_iterable:
             line = str(item).strip()
@@ -68,9 +70,12 @@ def merge(
     - Filters out names in blocklist.
     - Returns list of records sorted by popularity descending.
     """
-    blocked = set()
+    blocked: set[str] = set()
     if blocklist is not None:
-        blocked = load_blocklist(blocklist)
+        if isinstance(blocklist, (str, Path)):
+            blocked = load_blocklist(blocklist)
+        elif isinstance(blocklist, Iterable):
+            blocked = {normalise(item) for item in blocklist if normalise(item)}
 
     merged_map: dict[str, dict[str, Any]] = {}
 

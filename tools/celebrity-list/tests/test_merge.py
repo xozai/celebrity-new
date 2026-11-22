@@ -48,6 +48,15 @@ class TestBlocklist(unittest.TestCase):
         finally:
             os.remove(tmp_path)
 
+    def test_missing_blocklist_file_raises_error(self):
+        non_existent = Path("/path/that/does/not/exist/blocklist.txt")
+        with self.assertRaises(FileNotFoundError):
+            load_blocklist(non_existent)
+
+    def test_in_memory_blocklist_iterable(self):
+        blocked = load_blocklist(["Adolf Hitler", " Osama bin Laden "])
+        self.assertEqual(blocked, {"adolf hitler", "osama bin laden"})
+
 
 class TestMerge(unittest.TestCase):
     def setUp(self):
