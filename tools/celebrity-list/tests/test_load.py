@@ -70,7 +70,7 @@ class TestLoad(unittest.TestCase):
             {
                 "name": "Tom Hanks",
                 "name_norm": "tom hanks",
-                "description": "American actor",
+                "description": "",
                 "category": "film_tv",
                 "popularity": 0.95,
                 "sources": ["imdb", "wikipedia"],
@@ -91,12 +91,19 @@ class TestLoad(unittest.TestCase):
         self.assertIn("BEGIN;", script)
         self.assertIn("CREATE TEMP TABLE staging_celebrities", script)
         self.assertIn(
-            "COPY staging_celebrities (name, name_norm, description, category, popularity, sources) FROM STDIN WITH (FORMAT csv, HEADER false);",
+            "COPY staging_celebrities (name, name_norm, description, category, popularity, sources) FROM STDIN WITH (FORMAT csv, HEADER false, FORCE_NOT_NULL (description));",
+            script,
+        )
+        self.assertIn("popularity double precision NOT NULL", script)
+        self.assertIn("sources text[] NOT NULL", script)
+        self.assertIn("Tom Hanks,tom hanks,,film_tv,0.9500,\"{imdb,wikipedia}\"\n", script)
+        self.assertIn(
+            "INSERT INTO public.celebrities (name, name_norm, description, category, popularity, sources)",
             script,
         )
         self.assertIn("\\.\n", script)
         self.assertIn("ON CONFLICT (name_norm) DO UPDATE SET", script)
-        self.assertIn("DELETE FROM celebrities", script)
+        self.assertIn("DELETE FROM public.celebrities", script)
         self.assertIn("COMMIT;", script)
 
         # Verify NO SQL INSERT statements exist (rows must be passed via COPY CSV data)

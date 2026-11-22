@@ -13,6 +13,26 @@ from merge import normalise, load_blocklist, merge, VALID_CATEGORIES
 
 
 class TestNormalise(unittest.TestCase):
+    def test_postgresql_name_norm_contract(self):
+        cases = {
+            "Beyoncé": "beyonce",
+            "Zoë  Kravitz": "zoe kravitz",
+            "Björk": "bjork",
+            "Æon Flux": "aeon flux",
+            "Renée O'Connor": "renee o'connor",
+            "Jean-Claude Van Damme": "jean-claude van damme",
+            "Samuel L. Jackson": "samuel l. jackson",
+            "Łukasz Fabiański": "lukasz fabianski",
+            "Mötley Crüe": "motley crue",
+            "  Straße  Test ": "strasse test",
+            "Œdipe": "oedipe",
+            "Søren": "soren",
+            "Đorđe": "dorde",
+        }
+        for name, expected in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(normalise(name), expected)
+
     def test_lowercase_and_strip(self):
         self.assertEqual(normalise("  Keanu Reeves  "), "keanu reeves")
         self.assertEqual(normalise("TOM HANKS"), "tom hanks")

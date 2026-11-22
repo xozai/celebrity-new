@@ -71,13 +71,13 @@ def generate_load_script(rows: list[dict[str, Any]]) -> str:
         "CREATE TEMP TABLE staging_celebrities (\n"
         "  name text NOT NULL,\n"
         "  name_norm text NOT NULL,\n"
-        "  description text,\n"
-        "  category text,\n"
-        "  popularity real NOT NULL,\n"
+        "  description text NOT NULL,\n"
+        "  category text NOT NULL,\n"
+        "  popularity double precision NOT NULL,\n"
         "  sources text[] NOT NULL\n"
         ") ON COMMIT DROP;\n\n"
         "COPY staging_celebrities (name, name_norm, description, category, popularity, sources) "
-        "FROM STDIN WITH (FORMAT csv, HEADER false);\n"
+        "FROM STDIN WITH (FORMAT csv, HEADER false, FORCE_NOT_NULL (description));\n"
     )
 
     csv_buf = io.StringIO()
@@ -100,7 +100,7 @@ def generate_load_script(rows: list[dict[str, Any]]) -> str:
     footer = (
         "\\.\n\n"
         "-- Upsert from staging into target table\n"
-        "INSERT INTO celebrities (name, name_norm, description, category, popularity, sources)\n"
+        "INSERT INTO public.celebrities (name, name_norm, description, category, popularity, sources)\n"
         "SELECT name, name_norm, description, category, popularity, sources\n"
         "FROM staging_celebrities\n"
         "ON CONFLICT (name_norm) DO UPDATE SET\n"
@@ -110,7 +110,7 @@ def generate_load_script(rows: list[dict[str, Any]]) -> str:
         "  popularity = EXCLUDED.popularity,\n"
         "  sources = EXCLUDED.sources;\n\n"
         "-- Delete absent rows\n"
-        "DELETE FROM celebrities\n"
+        "DELETE FROM public.celebrities\n"
         "WHERE name_norm NOT IN (SELECT name_norm FROM staging_celebrities);\n\n"
         "COMMIT;\n"
     )
