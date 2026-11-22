@@ -1,0 +1,57 @@
+name: Refresh Celebrities
+
+on:
+  schedule:
+    # Run at 00:00 on the 1st day of every month
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-celebrities
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Build and load celebrity recommendations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Ensure postgresql-client is installed
+        run: |
+          if ! command -v psql &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build recommendation list
+        run: python3 tools/celebrity-list/build.py
+
+      - name: Validate built list size
+        run: |
+          if [ ! -f tools/celebrity-list/celebrities.csv ]; then
+            echo "Error: celebrities.csv not found after build."
+            exit 1
+          fi
+          # Total lines minus CSV header line
+          lines=$(wc -l < tools/celebrity-list/celebrities.csv)
+          rows=$((lines - 1))
+          echo "Successfully built $rows celebrity recommendations."
+          if [ "$rows" -lt 2000 ]; then
+            echo "Error: built list contains $rows rows, which is fewer than the 2,000 threshold. Aborting load."
+            exit 1
+          fi
+
+      - name: Load celebrities into database
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL || secrets.DATABASE_URL }}
+        run: python3 tools/celebrity-list/load.py tools/celebrity-list/celebrities.csv --min-rows 2000
