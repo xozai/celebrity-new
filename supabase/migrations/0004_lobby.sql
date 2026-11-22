@@ -11,13 +11,26 @@ declare
   v_uid     uuid := public._uid();
   v_room_id uuid;
   v_room    public.rooms;
+  v_try     int := 0;
 begin
-  select room_id into v_room_id from public.players where user_id = v_uid;
-  if v_room_id is null then
-    raise exception 'not_member';
-  end if;
-  select * into v_room from public.rooms where id = v_room_id for update;
-  return v_room;
+  loop
+    v_try := v_try + 1;
+    select room_id into v_room_id from public.players where user_id = v_uid;
+    if v_room_id is null then
+      raise exception 'not_member';
+    end if;
+
+    select * into v_room from public.rooms where id = v_room_id for update;
+    -- The wait for the lock may have outlived the caller's seat (kick, leave, room switch,
+    -- cleanup). Only hand the room back if the caller is still in it; otherwise look again.
+    if found and exists (select 1 from public.players
+                          where room_id = v_room_id and user_id = v_uid) then
+      return v_room;
+    end if;
+    if v_try >= 3 then
+      raise exception 'not_member';
+    end if;
+  end loop;
 end;
 $$;
 

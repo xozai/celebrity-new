@@ -11,10 +11,21 @@ grant execute on function pg_temp.u(int) to public;
 create function pg_temp.act_as(u uuid) returns void language plpgsql as $$
 begin
   perform set_config('role', 'postgres', true);
+  insert into auth.users (id, aud, role, is_anonymous)
+  values (u, 'authenticated', 'authenticated', true) on conflict (id) do nothing;
   perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
   perform set_config('role', 'authenticated', true);
 end $$;
 grant execute on function pg_temp.act_as(uuid) to public;
+
+-- A bearer token as the API would present it, without making sure the account still exists.
+create function pg_temp.act_token(u uuid) returns void language plpgsql as $$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  perform set_config('role', 'authenticated', true);
+end $$;
+grant execute on function pg_temp.act_token(uuid) to public;
 
 create function pg_temp.act_admin() returns void language plpgsql as $$
 begin
@@ -78,7 +89,7 @@ begin
 end $$;
 grant execute on function pg_temp.play_turn(uuid, int, boolean) to public;
 
-select plan(42);
+select plan(51);
 
 -- A. Lobby room, users 1-4 ---------------------------------------------------------------------------------
 select pg_temp.new_game(0, 0);
@@ -216,7 +227,7 @@ select is(
   'and the player who is up is unchanged');
 
 -- F. delete_my_data -------------------------------------------------------------------------------------------------------------
-insert into auth.users (id, aud, role) values (pg_temp.u(82), 'authenticated', 'authenticated');
+
 select pg_temp.new_game(80, 2);
 select pg_temp.act_as(pg_temp.u(82));
 select public.delete_my_data();
@@ -240,6 +251,37 @@ select is((select count(*)::int from public.slips where room_id = pg_temp.room_o
 
 select pg_temp.act_as(pg_temp.u(91));
 select lives_ok($$ select public.delete_my_data() $$, 'delete_my_data is safe to repeat');
+
+-- G. Account identity (review finding 3) ---------------------------------------------------------------------------------------
+-- An anonymous account is deleted with its data, and the old token stops working.
+select pg_temp.new_game(100, 0);
+select pg_temp.act_as(pg_temp.u(102));
+select public.delete_my_data();
+select pg_temp.act_admin();
+select is((select count(*)::int from auth.users where id = pg_temp.u(102)), 0, 'an anonymous account is deleted');
+select pg_temp.act_token(pg_temp.u(102));
+select throws_ok($$ select public.create_room('Ghost') $$, 'P0001', 'not_authenticated', 'the old token cannot create a room');
+select throws_ok(format($$ select public.heartbeat(%L) $$, pg_temp.room_of(pg_temp.u(101))), 'P0001', 'not_authenticated', 'the old token cannot heartbeat');
+select throws_ok($$ select * from public.suggest_celebrities('tom') $$, 'P0001', 'not_authenticated', 'the old token cannot ask for suggestions');
+
+-- A permanent (non-anonymous) account loses its game data but keeps its login.
+select pg_temp.act_admin();
+insert into auth.users (id, aud, role, is_anonymous) values (pg_temp.u(111), 'authenticated', 'authenticated', false);
+select pg_temp.new_game(110, 0);
+select pg_temp.act_as(pg_temp.u(111));
+select public.delete_my_data();
+select pg_temp.act_admin();
+select is((select count(*)::int from public.players where user_id = pg_temp.u(111)), 0, 'a permanent account''s game data is deleted');
+select is((select count(*)::int from auth.users where id = pg_temp.u(111)), 1, 'but its account row is kept');
+select pg_temp.act_token(pg_temp.u(111));
+select lives_ok($$ select public.create_room('Back') $$, 'and it can keep playing');
+
+-- An account removed behind the game's back is refused too.
+select pg_temp.act_admin();
+delete from auth.users where id = pg_temp.u(103);
+select pg_temp.act_token(pg_temp.u(103));
+select throws_ok(format($$ select public.get_snapshot(%L) $$, pg_temp.room_of(pg_temp.u(101))), 'P0001', 'not_authenticated', 'a token for a removed account cannot read a snapshot');
+select throws_ok($$ select public.leave_room() $$, 'P0001', 'not_authenticated', 'nor leave a room');
 
 -- Everything above is for signed-in users only ------------------------------------------------------------------------------------
 select pg_temp.act_admin();

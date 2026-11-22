@@ -114,8 +114,10 @@ begin
     raise exception 'already_host';
   end if;
 
+  -- FOR UPDATE waits for a heartbeat that is mid-write, so the decision uses the latest value.
   select last_seen_at into v_host_seen
-    from public.players where room_id = v_room.id and user_id = v_room.host_id;
+    from public.players where room_id = v_room.id and user_id = v_room.host_id
+     for update;
   -- No host row at all counts as stale.
   if v_host_seen is not null and v_host_seen >= now() - interval '45 seconds' then
     raise exception 'host_still_active';
@@ -162,8 +164,8 @@ begin
 end;
 $$;
 
--- delete_my_data: leave any room, drop everything tied to this user, and remove the anonymous
--- account itself (App Store account-deletion requirement). Safe to call twice. ------------------------------
+-- delete_my_data: leave any room and drop everything tied to this user. An anonymous account
+-- (what the app signs in with) is deleted as well; any other account type keeps its login. -------------
 create function public.delete_my_data()
 returns void
 language plpgsql
@@ -174,15 +176,19 @@ declare
   v_uid     uuid := public._uid();
   v_room_id uuid;
 begin
+  perform public._lock_user(v_uid);
+
   select room_id into v_room_id from public.players where user_id = v_uid;
   if v_room_id is not null then
     perform 1 from public.rooms where id = v_room_id for update;
-    perform public._remove_player(v_room_id, v_uid);
+    if exists (select 1 from public.players where room_id = v_room_id and user_id = v_uid) then
+      perform public._remove_player(v_room_id, v_uid);
+    end if;
   end if;
 
   update public.slips set author_id = null where author_id = v_uid;
   update public.rooms set created_by = null where created_by = v_uid;
-  delete from auth.users where id = v_uid;
+  delete from auth.users where id = v_uid and is_anonymous;
 end;
 $$;
 

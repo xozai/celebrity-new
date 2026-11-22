@@ -11,6 +11,8 @@ grant execute on function pg_temp.u(int) to public;
 create function pg_temp.act_as(u uuid) returns void language plpgsql as $$
 begin
   perform set_config('role', 'postgres', true);
+  insert into auth.users (id, aud, role, is_anonymous)
+  values (u, 'authenticated', 'authenticated', true) on conflict (id) do nothing;
   perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
   perform set_config('role', 'authenticated', true);
 end $$;

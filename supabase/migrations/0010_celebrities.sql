@@ -47,6 +47,7 @@ declare
   v_limit int  := greatest(1, least(coalesce(max, 6), 10));
   v_like  text;
 begin
+  perform public._uid();
   if char_length(v_q) < 2 then
     return;
   end if;
@@ -77,6 +78,7 @@ declare
   v_n  int := greatest(1, least(coalesce(n, 8), 20));
   v_ex text[];
 begin
+  perform public._uid();
   select coalesce(array_agg(public._norm_name(e)), '{}') into v_ex
     from unnest(coalesce(exclude, '{}')) as e
    where e is not null;

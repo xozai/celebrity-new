@@ -15,7 +15,9 @@ as $$
 declare
   v_uid uuid := auth.uid();
 begin
-  if v_uid is null then
+  -- A token is only as good as the account behind it: refuse tokens whose auth.users row is gone.
+  if v_uid is null
+     or not exists (select 1 from auth.users where id = v_uid and deleted_at is null) then
     raise exception 'not_authenticated';
   end if;
   return v_uid;
@@ -66,7 +68,28 @@ begin
 end;
 $$;
 
--- Takes the caller out of whatever room they are in, if any. ---------------------------------
+-- Membership changes by one user are serialised, so a user cannot be switching rooms in two
+-- sessions at once. Room locks are always taken in uuid order (see _lock_rooms), so two users
+-- switching in opposite directions cannot deadlock.
+create function public._lock_user(p_user_id uuid)
+returns void
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  select pg_advisory_xact_lock(hashtextextended(p_user_id::text, 0));
+$$;
+
+create function public._lock_rooms(p_a uuid, p_b uuid)
+returns void
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  select 1 from public.rooms where id in (p_a, p_b) order by id for update;
+$$;
+
+-- Takes the caller out of whatever room they are in, if any. Caller holds _lock_user. -------------
 create function public._leave_current_room(p_user_id uuid)
 returns void
 language plpgsql
@@ -81,7 +104,10 @@ begin
     return;
   end if;
   perform 1 from public.rooms where id = v_room_id for update;
-  perform public._remove_player(v_room_id, p_user_id);
+  -- Re-check after the wait: a kick or cleanup may have got there first.
+  if exists (select 1 from public.players where room_id = v_room_id and user_id = p_user_id) then
+    perform public._remove_player(v_room_id, p_user_id);
+  end if;
 end;
 $$;
 
@@ -115,6 +141,8 @@ declare
   v_code    text;
   v_try     int := 0;
 begin
+  perform public._lock_user(v_uid);
+
   if (select count(*) from public.rooms
        where created_by = v_uid and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'rate_limited';
@@ -154,17 +182,34 @@ set search_path = public, pg_temp
 as $$
 declare
   v_uid  uuid := public._uid();
+  v_dest uuid;
+  v_old  uuid;
   v_room public.rooms;
   v_name text;
 begin
-  select * into v_room from public.rooms
-   where code = upper(btrim(coalesce(p_code, ''))) for update;
-  if not found then
+  perform public._lock_user(v_uid);
+
+  select id into v_dest from public.rooms where code = upper(btrim(coalesce(p_code, '')));
+  if v_dest is null then
     raise exception 'room_not_found';
   end if;
 
+  -- Lock the destination and the room being left together, in a fixed order.
+  select room_id into v_old from public.players where user_id = v_uid;
+  perform public._lock_rooms(v_dest, v_old);
+
+  select * into v_room from public.rooms where id = v_dest;
+  if not found then
+    raise exception 'room_not_found';
+  end if;
+  -- Re-check after the wait: the old seat may have been removed in the meantime.
+  if v_old is not null
+     and not exists (select 1 from public.players where room_id = v_old and user_id = v_uid) then
+    v_old := null;
+  end if;
+
   -- Already seated here: hand back the existing seat untouched.
-  if exists (select 1 from public.players where room_id = v_room.id and user_id = v_uid) then
+  if v_old = v_dest then
     return public._snapshot(v_room.id);
   end if;
 
@@ -174,7 +219,9 @@ begin
     raise exception 'name_taken';
   end if;
 
-  perform public._leave_current_room(v_uid);
+  if v_old is not null then
+    perform public._remove_player(v_old, v_uid);
+  end if;
 
   insert into public.players (room_id, user_id, name, role, seat)
   values (
@@ -199,11 +246,15 @@ declare
   v_uid     uuid := public._uid();
   v_room_id uuid;
 begin
+  perform public._lock_user(v_uid);
   select room_id into v_room_id from public.players where user_id = v_uid;
   if v_room_id is null then
     raise exception 'not_member';
   end if;
   perform 1 from public.rooms where id = v_room_id for update;
+  if not exists (select 1 from public.players where room_id = v_room_id and user_id = v_uid) then
+    raise exception 'not_member';
+  end if;
   perform public._remove_player(v_room_id, v_uid);
 end;
 $$;
