@@ -1,3 +1,4 @@
+import CelebrityBackend
 import SwiftUI
 
 @main
@@ -14,7 +15,7 @@ struct PlaceholderView: View {
         VStack(spacing: 12) {
             Text("Celebrity Celebrity")
                 .font(.largeTitle.bold())
-            Text("Coming soon")
+            Text("\(CelebrityBackend.roundCount) rounds. Coming soon.")
                 .foregroundStyle(.secondary)
         }
         .padding()

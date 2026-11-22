@@ -9,12 +9,20 @@ settings:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
+packages:
+  CelebrityCore:
+    path: Packages/CelebrityCore
+  CelebrityBackend:
+    path: Packages/CelebrityBackend
 targets:
   Celebrity:
     type: application
     platform: iOS
     sources:
       - App
+    dependencies:
+      - package: CelebrityCore
+      - package: CelebrityBackend
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.xozai.CelebrityGame
