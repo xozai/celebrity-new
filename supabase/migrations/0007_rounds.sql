@@ -15,7 +15,7 @@ begin
      set phase = case when round >= 3 then 'finished' else 'round_end' end,
          current_team = null,
          turn_player_id = null,
-         finished_at = case when round >= 3 then now() end,
+         finished_at = case when round >= 3 then clock_timestamp() end,
          last_activity_at = now()
    where id = p_room_id;
 end;

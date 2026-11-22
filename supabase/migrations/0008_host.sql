@@ -153,7 +153,7 @@ begin
     from public.players where room_id = v_room.id and user_id = v_room.host_id
      for update;
   -- No host row at all counts as stale.
-  if v_host_seen is not null and v_host_seen >= now() - interval '45 seconds' then
+  if v_host_seen is not null and v_host_seen >= clock_timestamp() - interval '45 seconds' then
     raise exception 'host_still_active';
   end if;
 
@@ -173,6 +173,7 @@ declare
   v_target public.players;
   v_size   int;
   v_pos    int;
+  v_cursor int;
 begin
   if p_team is null or p_team not in (0, 1) then
     raise exception 'invalid_team';
@@ -194,11 +195,12 @@ begin
     into v_size, v_pos
     from public.players p
    where p.room_id = v_room.id and p.team = p_team and p.role = 'player';
-  if v_size > 0 and v_pos <= mod(v_room.turn_idx[p_team + 1], v_size) then
-    update public.rooms
-       set turn_idx[p_team + 1] = mod(turn_idx[p_team + 1], v_size) + 1
-     where id = v_room.id;
-  end if;
+  -- Reduce the stored index modulo the OLD size first (it may have wrapped), then move it up one
+  -- place only if the newcomer sits at or before the person it points at.
+  v_cursor := case when v_size > 0 then mod(v_room.turn_idx[p_team + 1], v_size) else 0 end;
+  update public.rooms
+     set turn_idx[p_team + 1] = case when v_size > 0 and v_pos <= v_cursor then v_cursor + 1 else v_cursor end
+   where id = v_room.id;
 
   update public.players
      set role = 'player', team = p_team, submitted = false
@@ -221,11 +223,9 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
-  v_uid     uuid := public._uid();
+  v_uid     uuid := public._uid_locked();
   v_room_id uuid;
 begin
-  perform public._lock_user(v_uid);
-
   select room_id into v_room_id from public.players where user_id = v_uid;
   if v_room_id is not null then
     perform 1 from public.rooms where id = v_room_id for update;
@@ -234,11 +234,12 @@ begin
     end if;
   end if;
 
-  update public.slips set author_id = null where author_id = v_uid;
-  update public.rooms set created_by = null where created_by = v_uid;
+  -- Only rows that belong to this user are touched below, and no other room row is locked here
+  -- (_remove_player already detached their slips), so this cannot lock rooms in a conflicting order.
   delete from public.room_creations where user_id = v_uid;
-  -- Scores and results stay; the name and identity do not.
-  update public.turns set player_id = null, player_name = 'Former player' where player_id = v_uid;
+  -- Scores and results stay; the name and identity do not. Rows are taken in id order.
+  update public.turns set player_id = null, player_name = 'Former player'
+   where id in (select id from public.turns where player_id = v_uid order by id for update);
   delete from auth.users where id = v_uid and is_anonymous;
 end;
 $$;

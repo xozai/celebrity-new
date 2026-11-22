@@ -13,6 +13,22 @@ begin
 end $$;
 grant execute on function pg_temp.act_as(uuid) to public;
 
+create function pg_temp.act_admin() returns void language plpgsql as $$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+end $$;
+grant execute on function pg_temp.act_admin() to public;
+
+-- A bearer token as the API would present it, without making sure the account still exists.
+create function pg_temp.act_token(u uuid) returns void language plpgsql as $$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  perform set_config('role', 'authenticated', true);
+end $$;
+grant execute on function pg_temp.act_token(uuid) to public;
+
 create function pg_temp.act_anon() returns void language plpgsql as $$
 begin
   perform set_config('role', 'postgres', true);
@@ -21,7 +37,7 @@ begin
 end $$;
 grant execute on function pg_temp.act_anon() to public;
 
-select plan(23);
+select plan(29);
 
 -- Fixtures, written as the table owner ---------------------------------------------
 insert into public.rooms (id, code, host_id) values
@@ -88,6 +104,19 @@ select throws_ok(
   $$ insert into public.turns (room_id, round, team, player_id, player_name)
      values ('a0000000-0000-0000-0000-00000000000a', 1, 0, '00000000-0000-0000-0000-000000000001', 'Ann') $$,
   '42501', null, 'insert on turns denied');
+
+-- Direct reads (and Realtime, which uses the same policies) also need a live account (review finding 4) -------------
+select pg_temp.act_admin();
+delete from auth.users where id = '00000000-0000-0000-0000-000000000001';
+update auth.users set deleted_at = now() where id = '00000000-0000-0000-0000-000000000002';
+select pg_temp.act_token('00000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.rooms), 0, 'a deleted account whose seat remains reads no rooms');
+select is((select count(*)::int from public.players), 0, 'and no players');
+select is((select count(*)::int from public.turns), 0, 'and no turns');
+select pg_temp.act_token('00000000-0000-0000-0000-000000000002');
+select is((select count(*)::int from public.rooms), 0, 'a soft-deleted account reads no rooms');
+select is((select count(*)::int from public.players), 0, 'and no players');
+select is((select count(*)::int from public.turns), 0, 'and no turns');
 
 select * from finish();
 

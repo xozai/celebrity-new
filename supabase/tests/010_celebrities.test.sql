@@ -51,7 +51,7 @@ begin
 end $$;
 grant execute on function pg_temp.heavy_wins(int) to public;
 
-select plan(57);
+select plan(59);
 
 insert into public.celebrities (name, name_norm, description, category, popularity, sources) values
   ('Taylor Swift',        'taylor swift',        'American singer-songwriter', 'music',         0.99, '{wikipedia,imdb}'),
@@ -96,6 +96,9 @@ select is(public._norm_name('Samuel L. Jackson'),       'samuel l. jackson',    
 select is(public._norm_name('Łukasz Fabiański'),        'lukasz fabianski',        'norm: Ł and ń');
 select is(public._norm_name('Mötley Crüe'),             'motley crue',             'norm: umlauts');
 select is(public._norm_name('  Straße  Test '),         'strasse test',            'norm: ß expands to ss, trimmed and collapsed');
+-- unaccent can introduce whitespace of its own ('½' becomes ' 1/2'), so whitespace is collapsed after it.
+select is(public._norm_name('½ Man'),                   '1/2 man',                 'norm: whitespace introduced by unaccent is trimmed');
+select is(public._norm_name('Sir ½ Man'),               'sir 1/2 man',             'norm: whitespace introduced by unaccent is collapsed');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
 
 -- Access -------------------------------------------------------------------------------------------------------
@@ -178,8 +181,13 @@ create temp table ex2 as
   select array_agg(name) as names from public.celebrities where name not in ('Heavy Hitter', 'Light Touch');
 grant all on ex2 to public;
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-select cmp_ok(pg_temp.heavy_wins(300), '>=', 270, 'over 300 separate draws the more popular name wins about 99 in 100');
-select cmp_ok(pg_temp.heavy_wins(300), '<', 300, 'but the less popular name still gets drawn sometimes');
+-- One run of 2000 separate draws feeds both checks. Weights are 1.0 and 0.01, so the light name is
+-- drawn about 20 times. The chance of it never appearing is 0.99^2000, about 2e-9, and the heavy name
+-- winning fewer than 1900 times is roughly 18 standard deviations from the mean: neither can flake.
+create temp table sample_run as select pg_temp.heavy_wins(2000) as heavy;
+grant all on sample_run to public;
+select cmp_ok((select heavy from sample_run), '>=', 1900, 'over 2000 separate draws the more popular name wins about 99 in 100');
+select cmp_ok((select heavy from sample_run), '<', 2000, 'but the less popular name still gets drawn');
 
 -- rooms.suggestions_enabled ----------------------------------------------------------------------------------------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000011');

@@ -76,7 +76,7 @@ grant execute on function pg_temp.room_of(uuid) to public;
 create temp table ctx (k text primary key, v text);
 grant all on ctx to public;
 
-select plan(37);
+select plan(38);
 
 -- Game 1: users 1-4 ------------------------------------------------------------------------------------
 select pg_temp.new_game(0);
@@ -219,8 +219,12 @@ select public.start_next_round();
 select pg_temp.act_admin();
 select is((select turn_player_id from public.rooms where id = (select room_id from public.players where user_id = pg_temp.u(11))), pg_temp.u(12), 'round 3 opens with Bob: the rotation moved on');
 select pg_temp.play_turn(pg_temp.u(12), 2, true);
+select pg_sleep(0.3);
 select pg_temp.play_turn(pg_temp.u(14), 2, false);
 select pg_temp.act_admin();
+select ok(
+  (select finished_at >= now() + interval '0.25 seconds' from public.rooms where id = pg_temp.room_of(pg_temp.u(11))),
+  'finished_at is the moment the last slip was scored, not the start of the transaction');
 select row_eq(
   $$ select phase, scores from public.rooms where id = (select room_id from public.players where user_id = pg_temp.u(11)) $$,
   row('finished'::text, '[[4,0],[0,4],[2,2]]'::jsonb), 'game 2 finishes');

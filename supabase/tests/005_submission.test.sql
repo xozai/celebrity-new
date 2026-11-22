@@ -23,7 +23,7 @@ grant execute on function pg_temp.act_admin() to public;
 create temp table ctx (k text primary key, v text);
 grant all on ctx to public;
 
-select plan(31);
+select plan(33);
 
 -- Room 1: Ann (host), Bob | Cy, Di, plus Ed who ends up a spectator. Two slips each. ------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
@@ -133,12 +133,23 @@ select throws_ok($$ select public.close_submissions() $$, 'P0001', 'deadline_not
 select pg_temp.act_admin();
 update public.rooms set submission_deadline = now() - interval '1 second' where code = (select v from ctx where k = 'code2');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000012');
-select throws_ok($$ select public.close_submissions() $$, 'P0001', 'no_slips', 'close with zero slips rejected');
 select throws_ok($$ select public.submit_slips(array['Late', 'Later', 'Latest']) $$, 'P0001', 'submissions_closed', 'submitting after the deadline rejected');
 
--- Reopen the window so Hal can hand in his slips, then let it expire again.
+-- An expired window with no slips at all would strand the room, so closing it sends everyone back to the lobby.
+select public.close_submissions();
 select pg_temp.act_admin();
-update public.rooms set submission_deadline = now() + interval '1 hour' where code = (select v from ctx where k = 'code2');
+select row_eq(
+  $$ select phase, submission_deadline, round from public.rooms where code = (select v from ctx where k = 'code2') $$,
+  row('lobby'::text, null::timestamptz, 0::smallint), 'closing an expired window with zero slips returns the room to the lobby');
+select is(
+  (select count(*)::int from public.players where submitted and room_id = (select id from public.rooms where code = (select v from ctx where k = 'code2'))),
+  0, 'and no one is marked as submitted');
+select pg_temp.act_as('00000000-0000-0000-0000-000000000012');
+select throws_ok($$ select public.close_submissions() $$, 'P0001', 'wrong_phase', 'close_submissions in the lobby is still rejected');
+
+-- The host starts again with a fresh window.
+select pg_temp.act_as('00000000-0000-0000-0000-000000000011');
+select public.start_game();
 
 select pg_temp.act_as('00000000-0000-0000-0000-000000000099');
 select throws_ok($$ select public.close_submissions() $$, 'P0001', 'not_member', 'non-member cannot close submissions');

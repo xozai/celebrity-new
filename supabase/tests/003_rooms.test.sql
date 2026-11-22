@@ -180,7 +180,7 @@ select throws_ok($$ select public.create_room('Zed') $$, 'P0001', 'rate_limited'
 select public.leave_room();
 select pg_temp.act_admin();
 select is(
-  (select count(*)::int from public.rooms where created_by = '00000000-0000-0000-0000-000000000009'), 0,
+  (select count(*)::int from public.rooms where host_id = '00000000-0000-0000-0000-000000000009'), 0,
   'the abandoned rooms are gone');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000009');
 select throws_ok($$ select public.create_room('Zed') $$, 'P0001', 'rate_limited', 'and the limit still holds');

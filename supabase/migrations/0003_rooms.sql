@@ -24,6 +24,26 @@ begin
 end;
 $$;
 
+-- Identity for calls that change membership. The per-user lock is taken from the raw token subject
+-- FIRST; only then is the account validated, in a statement that starts after any wait. A call that
+-- queued behind delete_my_data therefore sees the account gone and is refused. ----------------------
+create function public._uid_locked()
+returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null then
+    raise exception 'not_authenticated';
+  end if;
+  perform public._lock_user(v_uid);
+  return public._uid();
+end;
+$$;
+
 -- Snapshot: the only way a client sees the whole room. Slips are never included. -------------
 create function public._snapshot(p_room_id uuid)
 returns jsonb
@@ -33,7 +53,7 @@ security definer
 set search_path = public, pg_temp
 as $$
   select jsonb_build_object(
-    'room',    (select to_jsonb(r) - 'created_by' from public.rooms r where r.id = p_room_id),
+    'room',    (select to_jsonb(r) from public.rooms r where r.id = p_room_id),
     'players', coalesce((select jsonb_agg(to_jsonb(p) order by p.seat)
                            from public.players p where p.room_id = p_room_id), '[]'::jsonb),
     'turns',   coalesce((select jsonb_agg(to_jsonb(t) order by t.id)
@@ -140,14 +160,12 @@ set search_path = public, pg_temp
 as $$
 declare
   c_alphabet constant text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  v_uid     uuid := public._uid();
+  v_uid     uuid := public._uid_locked();
   v_name    text := public._clean_player_name(p_name);
   v_room_id uuid;
   v_code    text;
   v_try     int := 0;
 begin
-  perform public._lock_user(v_uid);
-
   if (select count(*) from public.room_creations
        where user_id = v_uid and created_at > now() - interval '1 hour') >= 5 then
     raise exception 'rate_limited';
@@ -160,8 +178,8 @@ begin
     select string_agg(substr(c_alphabet, 1 + floor(random() * length(c_alphabet))::int, 1), '')
       into v_code from generate_series(1, 4);
 
-    insert into public.rooms (code, host_id, created_by)
-    values (v_code, v_uid, v_uid)
+    insert into public.rooms (code, host_id)
+    values (v_code, v_uid)
     on conflict (code) do nothing
     returning id into v_room_id;
 
@@ -187,14 +205,12 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
-  v_uid  uuid := public._uid();
+  v_uid  uuid := public._uid_locked();
   v_dest uuid;
   v_old  uuid;
   v_room public.rooms;
   v_name text;
 begin
-  perform public._lock_user(v_uid);
-
   select id into v_dest from public.rooms where code = upper(btrim(coalesce(p_code, '')));
   if v_dest is null then
     raise exception 'room_not_found';
@@ -249,10 +265,9 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
-  v_uid     uuid := public._uid();
+  v_uid     uuid := public._uid_locked();
   v_room_id uuid;
 begin
-  perform public._lock_user(v_uid);
   select room_id into v_room_id from public.players where user_id = v_uid;
   if v_room_id is null then
     raise exception 'not_member';
@@ -292,7 +307,7 @@ as $$
 declare
   v_uid uuid := public._uid();
 begin
-  update public.players set last_seen_at = now()
+  update public.players set last_seen_at = clock_timestamp()
    where room_id = p_room_id and user_id = v_uid;
   if not found then
     raise exception 'not_member';

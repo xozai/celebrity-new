@@ -10,7 +10,6 @@ create table public.rooms (
   code                text not null unique
                         check (code ~ '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$'),
   host_id             uuid,
-  created_by          uuid,
   phase               text not null default 'lobby'
                         check (phase in ('lobby', 'submitting', 'playing', 'round_end', 'finished')),
   round               smallint not null default 0 check (round between 0 and 3),
@@ -39,7 +38,6 @@ create table public.rooms (
 );
 
 create index rooms_last_activity_idx on public.rooms (last_activity_at);
-create index rooms_created_by_idx on public.rooms (created_by, created_at);
 
 create table public.players (
   room_id      uuid not null references public.rooms (id) on delete cascade,

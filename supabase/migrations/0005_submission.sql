@@ -193,7 +193,15 @@ begin
     raise exception 'deadline_not_reached';
   end if;
   if not exists (select 1 from public.slips where room_id = v_room.id) then
-    raise exception 'no_slips';
+    -- Nobody handed anything in. Edits are closed and the game cannot start with an empty pile, so
+    -- send everyone back to the lobby for the host to start again.
+    update public.players set submitted = false where room_id = v_room.id;
+    update public.rooms
+       set phase = 'lobby',
+           submission_deadline = null,
+           last_activity_at = now()
+     where id = v_room.id;
+    return;
   end if;
 
   perform public._start_round(v_room.id, 1);

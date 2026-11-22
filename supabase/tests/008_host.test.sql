@@ -113,7 +113,7 @@ begin
 end $$;
 grant execute on function pg_temp.play_turn(uuid, int, boolean) to public;
 
-select plan(62);
+select plan(68);
 
 -- A. Lobby room, users 1-4 ---------------------------------------------------------------------------------
 select pg_temp.new_game(0, 0);
@@ -267,8 +267,8 @@ select pg_temp.act_as(pg_temp.u(91));
 select public.delete_my_data();
 select pg_temp.act_admin();
 select row_eq(
-  $$ select host_id, created_by from public.rooms where id = pg_temp.room_of(pg_temp.u(92)) $$,
-  row(pg_temp.u(92), null::uuid), 'the host role moves on and the room no longer points at the deleted user');
+  $$ select host_id from public.rooms where id = pg_temp.room_of(pg_temp.u(92)) $$,
+  row(pg_temp.u(92)), 'the host role moves on to the next seat');
 select is(
   (select count(*)::int from public.slips where room_id = pg_temp.room_of(pg_temp.u(92)) and author_id = pg_temp.u(91)), 0,
   'no slip is attributed to the deleted user');
@@ -365,6 +365,43 @@ select row_eq(
   $$ select current_team, turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(151)) $$,
   row(0::smallint, pg_temp.u(151)),
   'assign_spectator recovers the game once a team can field a clue-giver and a guesser');
+
+-- J. Promotion after the cursor has wrapped (review round 2, finding 6) --------------------------------------------------
+select pg_temp.new_game(160, 4);
+select pg_temp.play_turn(pg_temp.u(161), 0, true);
+select pg_temp.play_turn(pg_temp.u(163), 0, true);
+select pg_temp.play_turn(pg_temp.u(162), 0, true);
+select pg_temp.play_turn(pg_temp.u(164), 0, true);
+select pg_temp.act_admin();
+select row_eq(
+  $$ select current_team, turn_player_id, turn_idx[1] from public.rooms where id = pg_temp.room_of(pg_temp.u(161)) $$,
+  row(0::smallint, pg_temp.u(161), 2), 'setup: the cursor has wrapped (stored 2 on a team of two) and Ann is up');
+select pg_temp.act_as(pg_temp.u(165));
+select public.join_room(pg_temp.code_of(pg_temp.u(161)), 'Late');
+select pg_temp.act_as(pg_temp.u(161));
+select public.assign_spectator(pg_temp.u(165), 0);
+select pg_temp.act_admin();
+select is(
+  (select turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(161))), pg_temp.u(161),
+  'appending a third player after a wrapped cursor does not make the newcomer next');
+
+-- K. The host's age is judged at decision time, and heartbeats write real time (review round 2, finding 11) --------------
+select pg_temp.new_game(170, 0);
+select pg_temp.act_admin();
+update public.players set last_seen_at = clock_timestamp() - interval '44.7 seconds' where user_id = pg_temp.u(171);
+select pg_temp.act_as(pg_temp.u(172));
+select throws_ok($$ select public.claim_host() $$, 'P0001', 'host_still_active', 'a host seen 44.7 seconds ago is still active');
+select pg_sleep(0.5);
+select lives_ok($$ select public.claim_host() $$, 'half a second later, in the same transaction, the host has crossed 45 seconds');
+select pg_temp.act_admin();
+select is((select host_id from public.rooms where id = pg_temp.room_of(pg_temp.u(172))), pg_temp.u(172), 'and the claim took effect');
+select pg_sleep(0.3);
+select pg_temp.act_as(pg_temp.u(173));
+select public.heartbeat(pg_temp.room_of(pg_temp.u(173)));
+select pg_temp.act_admin();
+select ok(
+  (select last_seen_at >= now() + interval '0.25 seconds' from public.players where user_id = pg_temp.u(173)),
+  'a heartbeat records the wall-clock time, not the start of its transaction');
 
 -- G. Account identity (review finding 3) ---------------------------------------------------------------------------------------
 -- An anonymous account is deleted with its data, and the old token stops working.

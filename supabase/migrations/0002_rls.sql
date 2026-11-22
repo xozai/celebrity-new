@@ -28,9 +28,14 @@ stable
 security definer
 set search_path = public, pg_temp
 as $$
+  -- Non-throwing, so it is safe in policies: a seat only counts while the account behind the token
+  -- is live (the RPCs refuse such tokens with not_authenticated).
   select exists (
     select 1 from public.players p
     where p.room_id = p_room_id and p.user_id = auth.uid()
+  ) and exists (
+    select 1 from auth.users u
+    where u.id = auth.uid() and u.deleted_at is null
   );
 $$;
 

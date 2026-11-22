@@ -1,7 +1,7 @@
 -- Task 1.10: celebrity recommendations (docs/PLAN.md section 6a, layer 1).
 --
--- name_norm contract, shared with tools/celebrity-list: lowercase, accents stripped, runs of
--- whitespace collapsed to one space, trimmed. Punctuation is kept. public._norm_name() applies the
+-- name_norm contract, shared with tools/celebrity-list, applied in this order: unaccent (PostgreSQL's
+-- default rules), lowercase, runs of whitespace collapsed to one space, trim. Punctuation is kept. public._norm_name() applies the
 -- same rule to queries, so a loader that follows it will always match what suggest_celebrities sees.
 
 create extension if not exists unaccent with schema extensions;
@@ -31,7 +31,9 @@ language sql
 stable
 set search_path = public, extensions, pg_temp
 as $$
-  select lower(extensions.unaccent(btrim(regexp_replace(coalesce(p_text, ''), '\s+', ' ', 'g'))));
+  -- Order matters: unaccent can add whitespace of its own (e.g. '½' becomes ' 1/2'), so collapse
+  -- and trim after it.
+  select lower(btrim(regexp_replace(extensions.unaccent(coalesce(p_text, '')), '\s+', ' ', 'g')));
 $$;
 
 -- As-you-type suggestions: names starting with q, or with any word starting with q. ------------------

@@ -11,11 +11,17 @@ as $$
 declare
   v_deleted int;
 begin
-  with gone as (
-    delete from public.rooms
+  -- Rooms that something else holds are skipped (the next run gets them), so cleanup never waits on
+  -- one room while another call waits on it from the other side. Expiry is re-checked once a row is
+  -- locked, and rows are taken in id order, the same order join_room uses.
+  with doomed as (
+    select id from public.rooms
      where (phase = 'finished' and coalesce(finished_at, last_activity_at) < now() - interval '1 hour')
         or last_activity_at < now() - interval '24 hours'
-    returning 1
+     order by id
+       for update skip locked
+  ), gone as (
+    delete from public.rooms where id in (select id from doomed) returning 1
   )
   select count(*) into v_deleted from gone;
 
