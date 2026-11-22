@@ -34,7 +34,24 @@ create function pg_temp.names(q text, m int default 6) returns text[] language s
 $$;
 grant execute on function pg_temp.names(text, int) to public;
 
-select plan(46);
+-- Runs random_celebrities(1) once per trial (a separate call each time) and counts how often the
+-- most popular candidate comes out.
+create function pg_temp.heavy_wins(p_trials int) returns int language plpgsql as $$
+declare
+  v_wins int := 0;
+  v_name text;
+begin
+  for i in 1..p_trials loop
+    select r.name into v_name from public.random_celebrities(1, (select names from ex2)) r;
+    if v_name = 'Heavy Hitter' then
+      v_wins := v_wins + 1;
+    end if;
+  end loop;
+  return v_wins;
+end $$;
+grant execute on function pg_temp.heavy_wins(int) to public;
+
+select plan(57);
 
 insert into public.celebrities (name, name_norm, description, category, popularity, sources) values
   ('Taylor Swift',        'taylor swift',        'American singer-songwriter', 'music',         0.99, '{wikipedia,imdb}'),
@@ -66,6 +83,20 @@ select 'Zed ' || i, 'zed ' || i, 'Test person', 'other', 0.5 - i / 100.0, '{wiki
 insert into public.celebrities (name, name_norm, description, category, popularity, sources) values
   ('Heavy Hitter', 'heavy hitter', 'Test person', 'other', 1.0,  '{wikipedia}'),
   ('Light Touch',  'light touch',  'Test person', 'other', 0.01, '{wikipedia}');
+
+-- The name_norm contract shared with tools/celebrity-list (review finding 13) ----------------------------------------------
+select pg_temp.act_admin();
+select is(public._norm_name('Beyoncé'),                 'beyonce',                 'norm: Beyoncé');
+select is(public._norm_name('Zoë  Kravitz'),            'zoe kravitz',             'norm: whitespace collapsed, ë stripped');
+select is(public._norm_name('Björk'),                   'bjork',                   'norm: Björk');
+select is(public._norm_name('Æon Flux'),                'aeon flux',               'norm: Æ expands to ae');
+select is(public._norm_name('Renée O''Connor'),         'renee o''connor',         'norm: apostrophe kept');
+select is(public._norm_name('Jean-Claude Van Damme'),   'jean-claude van damme',   'norm: hyphen kept');
+select is(public._norm_name('Samuel L. Jackson'),       'samuel l. jackson',       'norm: full stop kept');
+select is(public._norm_name('Łukasz Fabiański'),        'lukasz fabianski',        'norm: Ł and ń');
+select is(public._norm_name('Mötley Crüe'),             'motley crue',             'norm: umlauts');
+select is(public._norm_name('  Straße  Test '),         'strasse test',            'norm: ß expands to ss, trimmed and collapsed');
+select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
 
 -- Access -------------------------------------------------------------------------------------------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
@@ -147,10 +178,8 @@ create temp table ex2 as
   select array_agg(name) as names from public.celebrities where name not in ('Heavy Hitter', 'Light Touch');
 grant all on ex2 to public;
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-select cmp_ok(
-  (select count(*)::int from generate_series(1, 300) g,
-     lateral public.random_celebrities(1, (select names from ex2)) r where r.name = 'Heavy Hitter'),
-  '>=', 270, 'the sample is weighted by popularity');
+select cmp_ok(pg_temp.heavy_wins(300), '>=', 270, 'over 300 separate draws the more popular name wins about 99 in 100');
+select cmp_ok(pg_temp.heavy_wins(300), '<', 300, 'but the less popular name still gets drawn sometimes');
 
 -- rooms.suggestions_enabled ----------------------------------------------------------------------------------------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000011');
