@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import datetime
 import json
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Callable
@@ -19,6 +21,7 @@ from merge import normalise, VALID_CATEGORIES
 HUMAN_QID = "Q5"
 DISAMBIGUATION_QID = "Q4167410"
 
+# Note: Q7889 (video game) is excluded so game titles are not treated as characters (Finding 7).
 FICTIONAL_QIDS = frozenset(
     {
         "Q95074",  # fictional character
@@ -32,7 +35,6 @@ FICTIONAL_QIDS = frozenset(
         "Q14860489",  # fictional character with superpowers
         "Q170584",  # comic book character
         "Q22908",  # legendary character
-        "Q7889",  # video game character
         "Q12377751",  # fictional human character
     }
 )
@@ -126,6 +128,39 @@ def default_fetch_url(url: str) -> bytes:
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read()
+
+
+def fetch_with_retries(
+    url: str,
+    fetch_fn: Callable[[str], bytes],
+    max_retries: int = 3,
+    backoff_factor: float = 0.5,
+) -> bytes:
+    """
+    Fetch URL with bounded retries and error detection (Finding 3).
+    Raises RuntimeError on repeated failure or API error responses.
+    """
+    last_err: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            raw = fetch_fn(url)
+            # Detect JSON API errors
+            try:
+                parsed = json.loads(raw.decode("utf-8"))
+                if isinstance(parsed, dict) and ("error" in parsed or "errors" in parsed):
+                    err_info = parsed.get("error") or parsed.get("errors")
+                    raise RuntimeError(f"API returned error: {err_info}")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+            return raw
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries:
+                time.sleep(backoff_factor * attempt)
+
+    raise RuntimeError(
+        f"Failed to fetch URL after {max_retries} attempts: {url}. Last error: {last_err}"
+    )
 
 
 def is_meta_article(title: str) -> bool:
@@ -243,7 +278,7 @@ def classify_category(
 def parse_wikidata_entities(wikidata_json: dict | str) -> list[dict[str, Any]]:
     """
     Parse Wikidata entities response. Keep only entities that represent humans
-    (P31 == Q5) or fictional characters, and exclude disambiguation pages.
+    (P31 == Q5) or fictional characters, and exclude disambiguation pages and games.
     """
     if isinstance(wikidata_json, str):
         wikidata_json = json.loads(wikidata_json)
@@ -271,7 +306,7 @@ def parse_wikidata_entities(wikidata_json: dict | str) -> list[dict[str, Any]]:
         if DISAMBIGUATION_QID in p31_ids:
             continue
 
-        # Check if human or fictional
+        # Check if human or fictional (games are excluded by omission from FICTIONAL_QIDS)
         is_human = HUMAN_QID in p31_ids
         is_fictional = any(q in FICTIONAL_QIDS for q in p31_ids)
         if not (is_human or is_fictional):
@@ -288,6 +323,10 @@ def parse_wikidata_entities(wikidata_json: dict | str) -> list[dict[str, Any]]:
         name = label_entry.get("value", "").strip()
         if not name:
             continue
+
+        # Extract English Wikipedia article title from sitelinks (Finding 6)
+        sitelinks = entity.get("sitelinks", {})
+        enwiki_title = sitelinks.get("enwiki", {}).get("title", "")
 
         # Extract P106 occupations
         p106_statements = claims.get("P106", [])
@@ -308,6 +347,7 @@ def parse_wikidata_entities(wikidata_json: dict | str) -> list[dict[str, Any]]:
                 "name_norm": normalise(name),
                 "description": description,
                 "category": cat,
+                "article_title": enwiki_title or name,
             }
         )
 
@@ -338,11 +378,14 @@ def fetch_wikipedia_celebrities(
     months: list[tuple[str, str]] | None = None,
     fetch_fn: Callable[[str], bytes] = default_fetch_url,
     max_candidates: int = 4000,
+    max_retries: int = 3,
 ) -> list[dict[str, Any]]:
     """
     Fetch top articles across given months from Wikimedia Pageviews API,
     look up Wikidata entities, filter to humans/fictional characters,
     and return ranked celebrity records.
+    Fails build on incomplete fetch with bounded retries (Finding 3).
+    Ranks candidates by aggregated Wikipedia view count before normalizing (Finding 6).
     """
     if months is None:
         months = get_default_months(12)
@@ -354,17 +397,14 @@ def fetch_wikipedia_celebrities(
             f"https://wikimedia.org/api/rest_v1/metrics/pageviews/top/"
             f"en.wikipedia/all-access/{year}/{month}/all-days"
         )
-        try:
-            raw = fetch_fn(url)
-            parsed = parse_pageviews_payload(raw.decode("utf-8"))
-            for entry in parsed:
-                t = entry["title"]
-                all_views[t] = all_views.get(t, 0) + entry["views"]
-        except Exception:
-            continue
+        raw = fetch_with_retries(url, fetch_fn=fetch_fn, max_retries=max_retries)
+        parsed = parse_pageviews_payload(raw.decode("utf-8"))
+        for entry in parsed:
+            t = entry["title"]
+            all_views[t] = all_views.get(t, 0) + entry["views"]
 
     if not all_views:
-        return []
+        raise RuntimeError("No Wikipedia pageview data retrieved; aborting recommendation build.")
 
     # Sort articles by total views descending and take top candidate articles
     sorted_articles = sorted(all_views.items(), key=lambda kv: kv[1], reverse=True)
@@ -380,30 +420,34 @@ def fetch_wikipedia_celebrities(
         titles_param = "|".join(urllib.parse.quote(t) for t in batch)
         wikidata_url = (
             f"https://www.wikidata.org/w/api.php?action=wbgetentities"
-            f"&sites=enwiki&titles={titles_param}&props=descriptions|claims|labels"
+            f"&sites=enwiki&titles={titles_param}&props=descriptions|claims|labels|sitelinks"
             f"&languages=en&format=json"
         )
-        try:
-            raw = fetch_fn(wikidata_url)
-            entities = parse_wikidata_entities(raw.decode("utf-8"))
-            for ent in entities:
-                norm = ent["name_norm"]
-                if not norm or norm in seen_norm:
-                    continue
-                seen_norm.add(norm)
-                # Attach total views from the article
-                candidates.append(ent)
-        except Exception:
-            continue
+        raw = fetch_with_retries(wikidata_url, fetch_fn=fetch_fn, max_retries=max_retries)
+        entities = parse_wikidata_entities(raw.decode("utf-8"))
+        for ent in entities:
+            norm = ent["name_norm"]
+            if not norm or norm in seen_norm:
+                continue
+            seen_norm.add(norm)
+
+            # Map entity back to its article view count (Finding 6)
+            art_title = ent.get("article_title", "")
+            art_key = art_title.replace(" ", "_")
+            views = all_views.get(art_key, all_views.get(art_title, 0))
+            ent["views"] = views
+            candidates.append(ent)
 
     if not candidates:
-        return []
+        raise RuntimeError("No eligible human or fictional character entities identified from Wikidata.")
+
+    # Sort candidates strictly by view count descending (Finding 6)
+    candidates.sort(key=lambda c: (-c.get("views", 0), c["name_norm"]))
 
     # Assign rank-normalised popularity in [0.0, 1.0]
     total = len(candidates)
     result = []
     for rank, cand in enumerate(candidates, start=1):
-        # Rank 1 gets 1.0, rank N gets > 0.0
         pop = round(max(0.0, min(1.0, (total - rank + 1) / total)), 4)
         result.append(
             {

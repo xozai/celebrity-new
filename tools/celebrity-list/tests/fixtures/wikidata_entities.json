@@ -1,5 +1,18 @@
 {
   "entities": {
+    "Q4653": {
+      "id": "Q4653",
+      "labels": {"en": {"language": "en", "value": "Sherlock Holmes"}},
+      "descriptions": {"en": {"language": "en", "value": "fictional detective created by Arthur Conan Doyle"}},
+      "claims": {
+        "P31": [
+          {"mainsnak": {"datavalue": {"value": {"id": "Q95074"}}}}
+        ]
+      },
+      "sitelinks": {
+        "enwiki": {"site": "enwiki", "title": "Sherlock Holmes"}
+      }
+    },
     "Q26876": {
       "id": "Q26876",
       "labels": {"en": {"language": "en", "value": "Taylor Swift"}},
@@ -12,6 +25,9 @@
           {"mainsnak": {"datavalue": {"value": {"id": "Q177220"}}}},
           {"mainsnak": {"datavalue": {"value": {"id": "Q753110"}}}}
         ]
+      },
+      "sitelinks": {
+        "enwiki": {"site": "enwiki", "title": "Taylor Swift"}
       }
     },
     "Q36161": {
@@ -25,16 +41,9 @@
         "P106": [
           {"mainsnak": {"datavalue": {"value": {"id": "Q33999"}}}}
         ]
-      }
-    },
-    "Q4653": {
-      "id": "Q4653",
-      "labels": {"en": {"language": "en", "value": "Sherlock Holmes"}},
-      "descriptions": {"en": {"language": "en", "value": "fictional detective created by Arthur Conan Doyle"}},
-      "claims": {
-        "P31": [
-          {"mainsnak": {"datavalue": {"value": {"id": "Q95074"}}}}
-        ]
+      },
+      "sitelinks": {
+        "enwiki": {"site": "enwiki", "title": "Cillian Murphy"}
       }
     },
     "Q615": {
@@ -48,6 +57,9 @@
         "P106": [
           {"mainsnak": {"datavalue": {"value": {"id": "Q937857"}}}}
         ]
+      },
+      "sitelinks": {
+        "enwiki": {"site": "enwiki", "title": "Lionel Messi"}
       }
     },
     "Q76": {
@@ -61,6 +73,9 @@
         "P106": [
           {"mainsnak": {"datavalue": {"value": {"id": "Q82955"}}}}
         ]
+      },
+      "sitelinks": {
+        "enwiki": {"site": "enwiki", "title": "Barack Obama"}
       }
     },
     "Q108874479": {
@@ -71,6 +86,9 @@
         "P31": [
           {"mainsnak": {"datavalue": {"value": {"id": "Q11424"}}}}
         ]
+      },
+      "sitelinks": {
+        "enwiki": {"site": "enwiki", "title": "Oppenheimer (film)"}
       }
     },
     "Q30": {
@@ -81,6 +99,22 @@
         "P31": [
           {"mainsnak": {"datavalue": {"value": {"id": "Q6256"}}}}
         ]
+      },
+      "sitelinks": {
+        "enwiki": {"site": "enwiki", "title": "United States"}
+      }
+    },
+    "Q12345": {
+      "id": "Q12345",
+      "labels": {"en": {"language": "en", "value": "Elden Ring"}},
+      "descriptions": {"en": {"language": "en", "value": "2022 action role-playing video game"}},
+      "claims": {
+        "P31": [
+          {"mainsnak": {"datavalue": {"value": {"id": "Q7889"}}}}
+        ]
+      },
+      "sitelinks": {
+        "enwiki": {"site": "enwiki", "title": "Elden Ring"}
       }
     }
   }
