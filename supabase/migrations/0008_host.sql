@@ -23,6 +23,13 @@ declare
   v_pos    int;
   v_cursor int;
 begin
+  -- The last one out closes the room: delete it directly, so their seat goes with the room and
+  -- nothing is announced per seat. (The creation quota lives in room_creations, so it is unaffected.)
+  if not exists (select 1 from public.players where room_id = p_room_id and user_id <> p_user_id) then
+    delete from public.rooms where id = p_room_id;
+    return;
+  end if;
+
   select * into v_room from public.rooms where id = p_room_id;
   select seat into v_seat from public.players where room_id = p_room_id and user_id = p_user_id;
 
@@ -236,11 +243,17 @@ begin
 
   -- Only rows that belong to this user are touched below, and no other room row is locked here
   -- (_remove_player already detached their slips), so this cannot lock rooms in a conflicting order.
-  delete from public.room_creations where user_id = v_uid;
   -- Scores and results stay; the name and identity do not. Rows are taken in id order.
   update public.turns set player_id = null, player_name = 'Former player'
    where id in (select id from public.turns where player_id = v_uid order by id for update);
-  delete from auth.users where id = v_uid and is_anonymous;
+
+  -- An anonymous account goes away entirely, quota log included. A retained account keeps its
+  -- login, so it also keeps its short-lived room-creation log (cleanup_rooms prunes it after the
+  -- hour); otherwise deleting game data would reset the 5-rooms-per-hour limit.
+  if exists (select 1 from auth.users where id = v_uid and is_anonymous) then
+    delete from public.room_creations where user_id = v_uid;
+    delete from auth.users where id = v_uid;
+  end if;
 end;
 $$;
 

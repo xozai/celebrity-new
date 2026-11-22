@@ -72,6 +72,12 @@ as $$
 declare
   v_was_host boolean;
 begin
+  -- The last one out closes the room; deleting the room removes their seat with it.
+  if not exists (select 1 from public.players where room_id = p_room_id and user_id <> p_user_id) then
+    delete from public.rooms where id = p_room_id;
+    return;
+  end if;
+
   select (host_id = p_user_id) into v_was_host from public.rooms where id = p_room_id;
 
   delete from public.players where room_id = p_room_id and user_id = p_user_id;

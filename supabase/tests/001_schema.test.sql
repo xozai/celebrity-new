@@ -3,7 +3,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(31);
+select plan(33);
 
 -- Tables ------------------------------------------------------------------
 select has_table('public', 'rooms', 'rooms exists');
@@ -97,6 +97,16 @@ select is(
   2,
   'duplicate slip names are separate rows'
 );
+
+-- A draw token exists exactly while the slip is the current one (review round 3, finding 6).
+select throws_ok(
+  $$ insert into public.slips (room_id, name, is_current, draw_token)
+     select id, 'Prince', false, gen_random_uuid() from public.rooms where code = 'ABCD' $$,
+  '23514', null, 'a slip that is not current cannot hold a draw token');
+select throws_ok(
+  $$ insert into public.slips (room_id, name, is_current)
+     select id, 'Prince', true from public.rooms where code = 'ABCD' $$,
+  '23514', null, 'a current slip must hold a draw token');
 
 -- turns + cascade -----------------------------------------------------------
 insert into public.turns (room_id, round, team, player_id, player_name)

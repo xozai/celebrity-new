@@ -74,6 +74,7 @@ begin
   update public.slips
      set in_pile = true,
          is_current = false,
+         draw_token = null,
          pile_order = random(),
          guessed_at = null,
          skipped_in_turn = false

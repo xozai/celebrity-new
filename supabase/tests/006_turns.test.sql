@@ -20,11 +20,22 @@ begin
 end $$;
 grant execute on function pg_temp.act_admin() to public;
 
--- The token of the slip currently being shown in the caller's room (what a client got back from its last draw).
-create function pg_temp.tok() returns uuid language sql security definer as $$
-  select s.draw_token from public.slips s
-   where s.is_current and s.room_id = (select room_id from public.players where user_id = auth.uid())
-$$;
+-- Token bookkeeping the way a client does it: remember the token from every RPC response, and send
+-- the remembered one with the next action. (Nothing here reads the slips table.)
+create function pg_temp.keep(j jsonb) returns jsonb language plpgsql as $$
+begin
+  insert into ctx (k, v) values ('tok', j ->> 'token') on conflict (k) do update set v = excluded.v;
+  return j;
+end $$;
+grant execute on function pg_temp.keep(jsonb) to public;
+
+create function pg_temp.tok() returns uuid language plpgsql as $$
+declare
+  v_tok uuid;
+begin
+  select c.v::uuid into v_tok from ctx c where c.k = 'tok';
+  return v_tok;
+end $$;
 grant execute on function pg_temp.tok() to public;
 
 create function pg_temp.u_(n int) returns uuid language sql as $$
@@ -35,7 +46,7 @@ grant execute on function pg_temp.u_(int) to public;
 create temp table ctx (k text primary key, v text);
 grant all on ctx to public;
 
-select plan(82);
+select plan(83);
 
 -- Room: Ann, Bob (team 0) | Cy, Di (team 1), three slips each, round 1 under way. -------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
@@ -67,20 +78,20 @@ select row_eq(
 
 -- Before the turn starts ------------------------------------------------------------------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-select throws_ok($$ select public.got_it(pg_temp.tok()) $$, 'P0001', 'turn_not_started', 'got_it before start_turn rejected');
-select throws_ok($$ select public.skip_slip(pg_temp.tok()) $$, 'P0001', 'turn_not_started', 'skip_slip before start_turn rejected');
+select throws_ok($$ select pg_temp.keep(public.got_it(pg_temp.tok())) $$, 'P0001', 'turn_not_started', 'got_it before start_turn rejected');
+select throws_ok($$ select pg_temp.keep(public.skip_slip(pg_temp.tok())) $$, 'P0001', 'turn_not_started', 'skip_slip before start_turn rejected');
 select is(public.current_slip(), null, 'current_slip is null before the turn starts');
 
 -- start_turn --------------------------------------------------------------------------------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000002');
-select throws_ok($$ select public.start_turn() $$, 'P0001', 'not_your_turn', 'a teammate who is not up cannot start the turn');
+select throws_ok($$ select pg_temp.keep(public.start_turn()) $$, 'P0001', 'not_your_turn', 'a teammate who is not up cannot start the turn');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000003');
-select throws_ok($$ select public.start_turn() $$, 'P0001', 'not_your_turn', 'the other team cannot start the turn');
+select throws_ok($$ select pg_temp.keep(public.start_turn()) $$, 'P0001', 'not_your_turn', 'the other team cannot start the turn');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000099');
-select throws_ok($$ select public.start_turn() $$, 'P0001', 'not_member', 'a non-member cannot start the turn');
+select throws_ok($$ select pg_temp.keep(public.start_turn()) $$, 'P0001', 'not_member', 'a non-member cannot start the turn');
 
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-insert into ctx values ('s1', public.start_turn()::text);
+insert into ctx values ('s1', pg_temp.keep(public.start_turn())::text);
 select pg_temp.act_admin();
 select is(
   (select v::jsonb ->> 'id' from ctx where k = 's1'),
@@ -96,7 +107,7 @@ select row_eq(
   row(0, 0, 12), 'a fresh turn has no got-its or skips');
 
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-select throws_ok($$ select public.start_turn() $$, 'P0001', 'turn_already_started', 'starting a running turn rejected');
+select throws_ok($$ select pg_temp.keep(public.start_turn()) $$, 'P0001', 'turn_already_started', 'starting a running turn rejected');
 
 -- current_slip ---------------------------------------------------------------------------------------------
 select is((public.current_slip() ->> 'id'), (select v::jsonb ->> 'id' from ctx where k = 's1'), 'the clue-giver gets the same slip back after a reconnect');
@@ -106,9 +117,9 @@ select pg_temp.act_as('00000000-0000-0000-0000-000000000003');
 select is(public.current_slip(), null, 'an opponent calling current_slip gets nothing');
 
 -- got_it ------------------------------------------------------------------------------------------------------
-select throws_ok($$ select public.got_it(pg_temp.tok()) $$, 'P0001', 'not_your_turn', 'only the clue-giver can call got_it');
+select throws_ok($$ select pg_temp.keep(public.got_it(pg_temp.tok())) $$, 'P0001', 'not_your_turn', 'only the clue-giver can call got_it');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-insert into ctx values ('s2', public.got_it(pg_temp.tok())::text);
+insert into ctx values ('s2', pg_temp.keep(public.got_it(pg_temp.tok()))::text);
 select pg_temp.act_admin();
 select isnt(
   (select v::jsonb ->> 'id' from ctx where k = 's2'),
@@ -127,14 +138,14 @@ select is(
 
 -- skip_slip -----------------------------------------------------------------------------------------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-select throws_ok($$ select public.skip_slip(pg_temp.tok()) $$, 'P0001', 'skip_not_allowed', 'skip rejected when skip_mode is off');
+select throws_ok($$ select pg_temp.keep(public.skip_slip(pg_temp.tok())) $$, 'P0001', 'skip_not_allowed', 'skip rejected when skip_mode is off');
 
 select pg_temp.act_admin();
 update public.rooms set skip_mode = 'one_per_turn';
 select pg_temp.act_as('00000000-0000-0000-0000-000000000002');
-select throws_ok($$ select public.skip_slip(pg_temp.tok()) $$, 'P0001', 'not_your_turn', 'only the clue-giver can skip');
+select throws_ok($$ select pg_temp.keep(public.skip_slip(pg_temp.tok())) $$, 'P0001', 'not_your_turn', 'only the clue-giver can skip');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-insert into ctx values ('s3', public.skip_slip(pg_temp.tok())::text);
+insert into ctx values ('s3', pg_temp.keep(public.skip_slip(pg_temp.tok()))::text);
 select pg_temp.act_admin();
 select isnt(
   (select v::jsonb ->> 'id' from ctx where k = 's3'), (select v::jsonb ->> 'id' from ctx where k = 's2'),
@@ -146,13 +157,13 @@ select row_eq(
   $$ select pile_count, turn_skips, turn_got from public.rooms $$,
   row(11, 1, 1), 'a skip does not change the pile or the score');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-select throws_ok($$ select public.skip_slip(pg_temp.tok()) $$, 'P0001', 'skip_not_allowed', 'second skip rejected under one_per_turn');
+select throws_ok($$ select pg_temp.keep(public.skip_slip(pg_temp.tok())) $$, 'P0001', 'skip_not_allowed', 'second skip rejected under one_per_turn');
 
 select pg_temp.act_admin();
 update public.rooms set skip_mode = 'unlimited';
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-select lives_ok($$ select public.skip_slip(pg_temp.tok()) $$, 'skips are unlimited when skip_mode is unlimited');
-select lives_ok($$ select public.skip_slip(pg_temp.tok()) $$, 'and again');
+select lives_ok($$ select pg_temp.keep(public.skip_slip(pg_temp.tok())) $$, 'skips are unlimited when skip_mode is unlimited');
+select lives_ok($$ select pg_temp.keep(public.skip_slip(pg_temp.tok())) $$, 'and again');
 select pg_temp.act_admin();
 select is(
   (select count(*)::int from public.slips where is_current), 1, 'there is always exactly one current slip during a turn');
@@ -164,8 +175,8 @@ select throws_ok($$ select public.end_turn() $$, 'P0001', 'deadline_not_reached'
 select pg_temp.act_admin();
 update public.rooms set turn_ends_at = now() - interval '1 second';
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-select throws_ok($$ select public.got_it(pg_temp.tok()) $$, 'P0001', 'turn_over', 'got_it after the deadline rejected');
-select throws_ok($$ select public.skip_slip(pg_temp.tok()) $$, 'P0001', 'turn_over', 'skip_slip after the deadline rejected');
+select throws_ok($$ select pg_temp.keep(public.got_it(pg_temp.tok())) $$, 'P0001', 'turn_over', 'got_it after the deadline rejected');
+select throws_ok($$ select pg_temp.keep(public.skip_slip(pg_temp.tok())) $$, 'P0001', 'turn_over', 'skip_slip after the deadline rejected');
 
 -- end_turn ---------------------------------------------------------------------------------------------------------------
 select pg_temp.act_admin();
@@ -196,6 +207,7 @@ select ok(
   (select in_pile and not is_current from public.slips where id = (select (v::jsonb ->> 'id')::uuid from ctx where k = 's3') ),
   'the unfinished slip is back in the pile');
 select is((select count(*)::int from public.slips where is_current or guessed_at is not null or skipped_in_turn), 0, 'per-turn markers are cleared');
+select is((select count(*)::int from public.slips where draw_token is not null), 0, 'a timed end leaves no draw token behind');
 select row_eq(
   $$ select current_team, turn_player_id, turn_idx, turn_ends_at, turn_got, turn_skips, pile_count, scores -> 0 from public.rooms $$,
   row(1::smallint, '00000000-0000-0000-0000-000000000003'::uuid, array[1, 0], null::timestamptz, 0, 0, 11, '[1,0]'::jsonb),
@@ -208,7 +220,7 @@ select is((select count(*)::int from public.turns), 1, 'and writes no second his
 
 -- The rotation: Cy, then Bob, then Di, then Ann again. ----------------------------------------------------------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000003');
-select public.start_turn();
+select pg_temp.keep(public.start_turn());
 select pg_temp.act_admin();
 update public.rooms set turn_ends_at = now() - interval '1 second';
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
@@ -216,7 +228,7 @@ select public.end_turn();
 select pg_temp.act_admin();
 select is((select turn_player_id::text from public.rooms), '00000000-0000-0000-0000-000000000002', 'after Cy comes Bob');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000002');
-select public.start_turn();
+select pg_temp.keep(public.start_turn());
 select pg_temp.act_admin();
 update public.rooms set turn_ends_at = now() - interval '1 second';
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
@@ -224,7 +236,7 @@ select public.end_turn();
 select pg_temp.act_admin();
 select is((select turn_player_id::text from public.rooms), '00000000-0000-0000-0000-000000000004', 'after Bob comes Di');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000004');
-select public.start_turn();
+select pg_temp.keep(public.start_turn());
 select pg_temp.act_admin();
 update public.rooms set turn_ends_at = now() - interval '1 second';
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
@@ -238,7 +250,7 @@ select throws_ok($$ select public.end_turn() $$, 'P0001', 'not_member', 'a non-m
 
 -- Per-draw tokens (review round 2, finding 5) --------------------------------------------------------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-insert into ctx values ('n1', public.start_turn()::text);
+insert into ctx values ('n1', pg_temp.keep(public.start_turn())::text);
 select ok((select (v::jsonb ->> 'token') ~ '^[0-9a-f-]{36}$' from ctx where k = 'n1'), 'start_turn returns a token with the slip');
 select is(public.current_slip() ->> 'token', (select v::jsonb ->> 'token' from ctx where k = 'n1'), 'current_slip returns the token of the current draw');
 insert into ctx values ('n2', public.got_it((select (v::jsonb ->> 'token')::uuid from ctx where k = 'n1'))::text);
@@ -324,8 +336,8 @@ select ok(
 update public.rooms set turn_ends_at = clock_timestamp() + interval '0.3 seconds';
 select pg_sleep(0.6);
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
-select throws_ok($$ select public.got_it(pg_temp.tok()) $$, 'P0001', 'turn_over', 'got_it that runs after expiry is rejected even in an older transaction');
-select throws_ok($$ select public.skip_slip(pg_temp.tok()) $$, 'P0001', 'turn_over', 'and so is skip_slip');
+select throws_ok($$ select pg_temp.keep(public.got_it(pg_temp.tok())) $$, 'P0001', 'turn_over', 'got_it that runs after expiry is rejected even in an older transaction');
+select throws_ok($$ select pg_temp.keep(public.skip_slip(pg_temp.tok())) $$, 'P0001', 'turn_over', 'and so is skip_slip');
 select is(public.current_slip(), null, 'current_slip returns nothing after expiry');
 select lives_ok($$ select public.end_turn() $$, 'end_turn is accepted once the real clock has passed the deadline');
 select pg_temp.act_admin();

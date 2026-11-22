@@ -54,9 +54,9 @@ grant execute on function pg_temp.new_game(int) to public;
 create function pg_temp.play_turn(p_user uuid, n int, expire boolean) returns void language plpgsql as $$
 begin
   perform pg_temp.act_as(p_user);
-  perform public.start_turn();
+  perform pg_temp.keep(public.start_turn());
   for i in 1..n loop
-    perform public.got_it(pg_temp.tok());
+    perform pg_temp.keep(public.got_it(pg_temp.tok()));
   end loop;
   if expire then
     perform pg_temp.act_admin();
@@ -73,17 +73,28 @@ create function pg_temp.room_of(p_user uuid) returns uuid language sql security 
 $$;
 grant execute on function pg_temp.room_of(uuid) to public;
 
--- The token of the slip currently being shown in the caller's room (what a client got back from its last draw).
-create function pg_temp.tok() returns uuid language sql security definer as $$
-  select s.draw_token from public.slips s
-   where s.is_current and s.room_id = (select room_id from public.players where user_id = auth.uid())
-$$;
+-- Token bookkeeping the way a client does it: remember the token from every RPC response, and send
+-- the remembered one with the next action. (Nothing here reads the slips table.)
+create function pg_temp.keep(j jsonb) returns jsonb language plpgsql as $$
+begin
+  insert into ctx (k, v) values ('tok', j ->> 'token') on conflict (k) do update set v = excluded.v;
+  return j;
+end $$;
+grant execute on function pg_temp.keep(jsonb) to public;
+
+create function pg_temp.tok() returns uuid language plpgsql as $$
+declare
+  v_tok uuid;
+begin
+  select c.v::uuid into v_tok from ctx c where c.k = 'tok';
+  return v_tok;
+end $$;
 grant execute on function pg_temp.tok() to public;
 
 create temp table ctx (k text primary key, v text);
 grant all on ctx to public;
 
-select plan(38);
+select plan(40);
 
 -- Game 1: users 1-4 ------------------------------------------------------------------------------------
 select pg_temp.new_game(0);
@@ -96,7 +107,7 @@ select pg_temp.play_turn(pg_temp.u(1), 3, false);
 select pg_temp.act_admin();
 select is((select pile_count from public.rooms where id = (select room_id from public.players where user_id = pg_temp.u(1))), 1, 'setup: one slip left');
 select pg_temp.act_as(pg_temp.u(1));
-select is(public.got_it(pg_temp.tok()), null, 'got_it returns null when the pile is empty');
+select is(pg_temp.keep(public.got_it(pg_temp.tok())), null, 'got_it returns null when the pile is empty');
 select pg_temp.act_admin();
 select row_eq(
   $$ select phase, round, pile_count, turn_player_id, turn_ends_at, turn_got
@@ -107,10 +118,10 @@ select is((select scores -> 0 from public.rooms where id = (select room_id from 
 select row_eq(
   $$ select count(*)::int, max(cardinality(guessed)) from public.turns $$,
   row(1, 4), 'the turn that emptied the pile is in the history with all four names');
-select is((select count(*)::int from public.slips where is_current), 0, 'no slip is left marked current');
+select is((select count(*)::int from public.slips where is_current or draw_token is not null), 0, 'no slip is left current and no draw token is left behind');
 
 select pg_temp.act_as(pg_temp.u(1));
-select throws_ok($$ select public.start_turn() $$, 'P0001', 'wrong_phase', 'no turns between rounds');
+select throws_ok($$ select pg_temp.keep(public.start_turn()) $$, 'P0001', 'wrong_phase', 'no turns between rounds');
 select lives_ok($$ select public.end_turn() $$, 'end_turn between rounds is a no-op');
 
 -- start_next_round -----------------------------------------------------------------------------------------------
@@ -119,6 +130,7 @@ select throws_ok($$ select public.start_next_round() $$, 'P0001', 'not_host', 'o
 select pg_temp.act_as(pg_temp.u(1));
 select public.start_next_round();
 select pg_temp.act_admin();
+select is((select count(*)::int from public.slips where draw_token is not null), 0, 'starting a round clears every draw token');
 select row_eq(
   $$ select phase, round, pile_count, current_team, turn_player_id
        from public.rooms where id = (select room_id from public.players where user_id = pg_temp.u(1)) $$,
@@ -154,6 +166,7 @@ select pg_temp.act_admin();
 select row_eq(
   $$ select phase, round, pile_count, turn_player_id from public.rooms where id = (select room_id from public.players where user_id = pg_temp.u(1)) $$,
   row('finished'::text, 3::smallint, 0, null::uuid), 'emptying the pile in round 3 finishes the game');
+select is((select count(*)::int from public.slips where draw_token is not null), 0, 'finishing the game leaves no draw token behind');
 select is(
   (select scores from public.rooms where id = (select room_id from public.players where user_id = pg_temp.u(1))),
   '[[4,0],[2,2],[1,3]]'::jsonb, 'scores by round');

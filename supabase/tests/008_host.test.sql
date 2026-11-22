@@ -100,9 +100,9 @@ grant execute on function pg_temp.code_of(uuid) to public;
 create function pg_temp.play_turn(p_user uuid, n int, expire boolean) returns void language plpgsql as $$
 begin
   perform pg_temp.act_as(p_user);
-  perform public.start_turn();
+  perform pg_temp.keep(public.start_turn());
   for i in 1..n loop
-    perform public.got_it(pg_temp.tok());
+    perform pg_temp.keep(public.got_it(pg_temp.tok()));
   end loop;
   if expire then
     perform pg_temp.act_admin();
@@ -113,14 +113,28 @@ begin
 end $$;
 grant execute on function pg_temp.play_turn(uuid, int, boolean) to public;
 
--- The token of the slip currently being shown in the caller's room (what a client got back from its last draw).
-create function pg_temp.tok() returns uuid language sql security definer as $$
-  select s.draw_token from public.slips s
-   where s.is_current and s.room_id = (select room_id from public.players where user_id = auth.uid())
-$$;
+create temp table ctx (k text primary key, v text);
+grant all on ctx to public;
+
+-- Token bookkeeping the way a client does it: remember the token from every RPC response, and send
+-- the remembered one with the next action. (Nothing here reads the slips table.)
+create function pg_temp.keep(j jsonb) returns jsonb language plpgsql as $$
+begin
+  insert into ctx (k, v) values ('tok', j ->> 'token') on conflict (k) do update set v = excluded.v;
+  return j;
+end $$;
+grant execute on function pg_temp.keep(jsonb) to public;
+
+create function pg_temp.tok() returns uuid language plpgsql as $$
+declare
+  v_tok uuid;
+begin
+  select c.v::uuid into v_tok from ctx c where c.k = 'tok';
+  return v_tok;
+end $$;
 grant execute on function pg_temp.tok() to public;
 
-select plan(68);
+select plan(70);
 
 -- A. Lobby room, users 1-4 ---------------------------------------------------------------------------------
 select pg_temp.new_game(0, 0);
@@ -187,6 +201,10 @@ select row_eq(
        from public.slips where room_id = pg_temp.room_of(pg_temp.u(31)) $$,
   row(4, 1, 0), 'the kicked player''s slips stay in the game, anonymised, and nothing is left current');
 
+select is(
+  (select count(*)::int from public.slips where draw_token is not null and room_id = pg_temp.room_of(pg_temp.u(31))), 0,
+  'removing the clue-giver mid-turn leaves no draw token behind');
+
 -- Kicking the player who is up but has not started re-picks the turn.
 select pg_temp.act_as(pg_temp.u(31));
 select public.kick_player(pg_temp.u(32));
@@ -198,8 +216,8 @@ select is(
 -- The host leaving mid-turn: the turn is closed and the host role moves on.
 select pg_temp.new_game(40, 4);
 select pg_temp.act_as(pg_temp.u(41));
-select public.start_turn();
-select public.got_it(pg_temp.tok());
+select pg_temp.keep(public.start_turn());
+select pg_temp.keep(public.got_it(pg_temp.tok()));
 select public.leave_room();
 select pg_temp.act_admin();
 select row_eq(
@@ -242,7 +260,7 @@ select throws_ok(format($$ select public.assign_spectator(%L, 2) $$, pg_temp.u(5
 select throws_ok(format($$ select public.assign_spectator(%L, 1) $$, pg_temp.u(52)), 'P0001', 'not_spectator', 'assign_spectator rejects someone who is already a player');
 select throws_ok(format($$ select public.assign_spectator(%L, 1) $$, pg_temp.u(99)), 'P0001', 'player_not_found', 'assign_spectator rejects a stranger');
 
-select public.start_turn();
+select pg_temp.keep(public.start_turn());
 select throws_ok(format($$ select public.assign_spectator(%L, 1) $$, pg_temp.u(55)), 'P0001', 'turn_active', 'assign_spectator rejected while a turn is running');
 
 select pg_temp.act_admin();
@@ -288,8 +306,8 @@ select lives_ok($$ select public.delete_my_data() $$, 'delete_my_data is safe to
 select pg_temp.new_game(120, 4);
 select pg_temp.play_turn(pg_temp.u(121), 1, true);
 select pg_temp.act_as(pg_temp.u(123));
-select public.start_turn();
-select public.got_it(pg_temp.tok());
+select pg_temp.keep(public.start_turn());
+select pg_temp.keep(public.got_it(pg_temp.tok()));
 select public.delete_my_data();   -- during their own running turn
 select pg_temp.act_admin();
 select row_eq(
@@ -431,6 +449,7 @@ select public.delete_my_data();
 select pg_temp.act_admin();
 select is((select count(*)::int from public.players where user_id = pg_temp.u(111)), 0, 'a permanent account''s game data is deleted');
 select is((select count(*)::int from auth.users where id = pg_temp.u(111)), 1, 'but its account row is kept');
+select is((select count(*)::int from public.room_creations where user_id = pg_temp.u(111)), 1, 'and so is its room-creation log, which cleanup_rooms prunes after the hour');
 select pg_temp.act_token(pg_temp.u(111));
 select lives_ok($$ select public.create_room('Back') $$, 'and it can keep playing');
 

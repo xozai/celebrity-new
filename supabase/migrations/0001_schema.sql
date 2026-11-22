@@ -67,6 +67,7 @@ create table public.slips (
   -- Unique to each draw of a slip (including a redraw of the same slip). Only the clue-giver is
   -- ever handed it, in the RPC result; this table is not readable by clients.
   draw_token       uuid,
+  constraint slips_token_iff_current check ((draw_token is not null) = is_current),
   -- Per-turn bookkeeping, cleared when the turn is written to public.turns.
   guessed_at       timestamptz,
   skipped_in_turn  boolean not null default false
