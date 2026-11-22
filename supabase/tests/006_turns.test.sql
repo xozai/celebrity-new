@@ -23,7 +23,7 @@ grant execute on function pg_temp.act_admin() to public;
 create temp table ctx (k text primary key, v text);
 grant all on ctx to public;
 
-select plan(46);
+select plan(59);
 
 -- Room: Ann, Bob (team 0) | Cy, Di (team 1), three slips each, round 1 under way. -------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
@@ -75,10 +75,10 @@ select is(
   (select id::text from public.slips where is_current),
   'start_turn returns the slip now marked current');
 select ok((select v::jsonb ->> 'name' from ctx where k = 's1') ~ '^[A-D][1-3]$', 'the slip carries its name');
-select is(
-  (select turn_ends_at from public.rooms),
-  (select now() + turn_seconds * interval '1 second' from public.rooms),
-  'turn_ends_at is turn_seconds from now');
+select ok(
+  (select turn_ends_at between clock_timestamp() + interval '59 seconds' and clock_timestamp() + interval '60 seconds'
+     from public.rooms),
+  'turn_ends_at is turn_seconds from the moment the turn starts');
 select row_eq(
   $$ select turn_got, turn_skips, pile_count from public.rooms $$,
   row(0, 0, 12), 'a fresh turn has no got-its or skips');
@@ -210,6 +210,47 @@ select is((select turn_idx from public.rooms), array[2, 2], 'each team has taken
 
 select pg_temp.act_as('00000000-0000-0000-0000-000000000099');
 select throws_ok($$ select public.end_turn() $$, 'P0001', 'not_member', 'a non-member cannot end a turn');
+
+-- Actions bound to a slip (review finding 6) ------------------------------------------------------------------
+select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
+insert into ctx values ('n1', public.start_turn()::text);
+insert into ctx values ('n2', public.got_it((select (v::jsonb ->> 'id')::uuid from ctx where k = 'n1'))::text);
+select pg_temp.act_admin();
+select row_eq($$ select turn_got, pile_count from public.rooms $$, row(1, 10), 'got_it with the displayed slip id scores it');
+select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
+select is(
+  public.got_it((select (v::jsonb ->> 'id')::uuid from ctx where k = 'n1')) ->> 'id',
+  (select v::jsonb ->> 'id' from ctx where k = 'n2'),
+  'a repeated got_it for the same slip returns the current slip');
+select pg_temp.act_admin();
+select row_eq($$ select turn_got, pile_count from public.rooms $$, row(1, 10), 'and scores nothing a second time');
+select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
+select is(
+  public.got_it(gen_random_uuid()) ->> 'id', (select v::jsonb ->> 'id' from ctx where k = 'n2'),
+  'got_it with an unknown slip id returns the current slip');
+select is(
+  public.skip_slip((select (v::jsonb ->> 'id')::uuid from ctx where k = 'n1')) ->> 'id', (select v::jsonb ->> 'id' from ctx where k = 'n2'),
+  'skip_slip for a slip that is no longer current returns the current slip');
+select pg_temp.act_admin();
+select row_eq($$ select turn_skips, pile_count from public.rooms $$, row(0, 10), 'and skips nothing');
+select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
+insert into ctx values ('n3', public.skip_slip((select (v::jsonb ->> 'id')::uuid from ctx where k = 'n2'))::text);
+select is(
+  public.got_it((select (v::jsonb ->> 'id')::uuid from ctx where k = 'n2')) ->> 'id', (select v::jsonb ->> 'id' from ctx where k = 'n3'),
+  'a score for the slip that was just skipped leaves its replacement alone');
+select pg_temp.act_admin();
+select row_eq($$ select turn_got, turn_skips, pile_count from public.rooms $$, row(1, 1, 10), 'nothing changed after the stale score');
+
+-- The deadline is judged when the request runs, not when its transaction began (review finding 5) --------------
+update public.rooms set turn_ends_at = clock_timestamp() + interval '0.3 seconds';
+select pg_sleep(0.6);
+select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
+select throws_ok($$ select public.got_it() $$, 'P0001', 'turn_over', 'got_it that runs after expiry is rejected even in an older transaction');
+select throws_ok($$ select public.skip_slip() $$, 'P0001', 'turn_over', 'and so is skip_slip');
+select is(public.current_slip(), null, 'current_slip returns nothing after expiry');
+select lives_ok($$ select public.end_turn() $$, 'end_turn is accepted once the real clock has passed the deadline');
+select pg_temp.act_admin();
+select ok((select ended_at >= now() + interval '0.5 seconds' from public.turns order by id desc limit 1), 'the history row records when the turn actually ended');
 
 select * from finish();
 

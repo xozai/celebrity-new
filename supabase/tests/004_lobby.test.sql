@@ -126,9 +126,9 @@ select public.set_teams('{"00000000-0000-0000-0000-000000000002": 0}'::jsonb);
 select public.start_game();
 select pg_temp.act_admin();
 select is((select phase from public.rooms), 'submitting', 'start_game moves the room to submitting');
-select is(
-  (select submission_deadline from public.rooms),
-  (select now() + submission_seconds * interval '1 second' from public.rooms),
+select ok(
+  (select submission_deadline between clock_timestamp() + interval '89 seconds' and clock_timestamp() + interval '90 seconds'
+     from public.rooms),
   'start_game sets the submission deadline from the setting');
 select is(
   (select role from public.players where user_id = '00000000-0000-0000-0000-000000000005'),

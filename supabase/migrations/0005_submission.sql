@@ -79,6 +79,10 @@ begin
   if v_room.phase <> 'submitting' then
     raise exception 'wrong_phase';
   end if;
+  -- Judged now, under the room lock, not at the start of the caller's transaction.
+  if clock_timestamp() >= v_room.submission_deadline then
+    raise exception 'submissions_closed';
+  end if;
 
   select * into v_player from public.players
    where room_id = v_room.id and user_id = auth.uid();
@@ -128,6 +132,9 @@ begin
   if v_room.phase <> 'submitting' then
     raise exception 'wrong_phase';
   end if;
+  if clock_timestamp() >= v_room.submission_deadline then
+    raise exception 'submissions_closed';
+  end if;
 
   delete from public.slips where room_id = v_room.id and author_id = auth.uid();
   update public.players set submitted = false
@@ -145,10 +152,14 @@ as $$
 declare
   v_room public.rooms := public._lock_my_room();
 begin
-  if v_room.phase <> 'submitting' then
+  if v_room.phase = 'lobby' then
     raise exception 'wrong_phase';
   end if;
-  if now() < v_room.submission_deadline then
+  -- Every phone calls this when its countdown ends; the first one wins and the rest do nothing.
+  if v_room.phase <> 'submitting' then
+    return;
+  end if;
+  if clock_timestamp() < v_room.submission_deadline then
     raise exception 'deadline_not_reached';
   end if;
   if not exists (select 1 from public.slips where room_id = v_room.id) then

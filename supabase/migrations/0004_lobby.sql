@@ -226,7 +226,7 @@ begin
   update public.rooms
      set phase = 'submitting',
          round = 0,
-         submission_deadline = now() + submission_seconds * interval '1 second',
+         submission_deadline = clock_timestamp() + submission_seconds * interval '1 second',
          last_activity_at = now()
    where id = v_room.id;
 end;

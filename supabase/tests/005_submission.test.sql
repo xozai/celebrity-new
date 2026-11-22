@@ -23,7 +23,7 @@ grant execute on function pg_temp.act_admin() to public;
 create temp table ctx (k text primary key, v text);
 grant all on ctx to public;
 
-select plan(28);
+select plan(31);
 
 -- Room 1: Ann (host), Bob | Cy, Di, plus Ed who ends up a spectator. Two slips each. ------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
@@ -134,12 +134,21 @@ select pg_temp.act_admin();
 update public.rooms set submission_deadline = now() - interval '1 second' where code = (select v from ctx where k = 'code2');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000012');
 select throws_ok($$ select public.close_submissions() $$, 'P0001', 'no_slips', 'close with zero slips rejected');
+select throws_ok($$ select public.submit_slips(array['Late', 'Later', 'Latest']) $$, 'P0001', 'submissions_closed', 'submitting after the deadline rejected');
+
+-- Reopen the window so Hal can hand in his slips, then let it expire again.
+select pg_temp.act_admin();
+update public.rooms set submission_deadline = now() + interval '1 hour' where code = (select v from ctx where k = 'code2');
 
 select pg_temp.act_as('00000000-0000-0000-0000-000000000099');
 select throws_ok($$ select public.close_submissions() $$, 'P0001', 'not_member', 'non-member cannot close submissions');
 
 select pg_temp.act_as('00000000-0000-0000-0000-000000000011');
 select public.submit_slips(array['Dolly', 'Tina', 'Cher']);
+select pg_temp.act_admin();
+update public.rooms set submission_deadline = now() - interval '1 second' where code = (select v from ctx where k = 'code2');
+select pg_temp.act_as('00000000-0000-0000-0000-000000000011');
+select throws_ok($$ select public.retract_slips() $$, 'P0001', 'submissions_closed', 'retracting after the deadline rejected');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000014');
 select public.close_submissions();
 select pg_temp.act_admin();
@@ -152,7 +161,11 @@ select is(
   (select count(*)::int from public.players where room_id = (select id from public.rooms where code = (select v from ctx where k = 'code2')) and role = 'player'),
   4, 'players who never submitted still play');
 select pg_temp.act_as('00000000-0000-0000-0000-000000000014');
-select throws_ok($$ select public.close_submissions() $$, 'P0001', 'wrong_phase', 'closing twice rejected');
+select lives_ok($$ select public.close_submissions() $$, 'closing twice is harmless');
+select pg_temp.act_admin();
+select row_eq(
+  $$ select phase, round, pile_count from public.rooms where code = (select v from ctx where k = 'code2') $$,
+  row('playing'::text, 1::smallint, 3), 'and changes nothing');
 
 -- Anonymous callers are locked out of everything above -------------------------------------------------------
 select pg_temp.act_admin();

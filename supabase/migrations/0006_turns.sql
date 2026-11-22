@@ -31,6 +31,17 @@ begin
 end;
 $$;
 
+create function public._current_slip_json(p_room_id uuid)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select jsonb_build_object('id', s.id, 'name', s.name)
+    from public.slips s where s.room_id = p_room_id and s.is_current;
+$$;
+
 -- Writes the finished turn to public.turns and tidies up. Does not check the clock. ---------------
 -- p_continue = true  : hand the turn to the other team's next player.
 -- p_continue = false : the round is over (pile empty); the caller decides what happens next.
@@ -45,7 +56,7 @@ declare
 begin
   select * into v_room from public.rooms where id = p_room_id;
 
-  insert into public.turns (room_id, round, team, player_id, player_name, guessed, skipped)
+  insert into public.turns (room_id, round, team, player_id, player_name, guessed, skipped, ended_at)
   values (
     v_room.id,
     v_room.round,
@@ -56,7 +67,8 @@ begin
     coalesce((select array_agg(name order by guessed_at, id) from public.slips
                where room_id = v_room.id and guessed_at is not null), '{}'),
     coalesce((select array_agg(name order by id) from public.slips
-               where room_id = v_room.id and skipped_in_turn and guessed_at is null), '{}')
+               where room_id = v_room.id and skipped_in_turn and guessed_at is null), '{}'),
+    clock_timestamp()
   );
 
   -- The unfinished slip goes back into the pile at a new random position.
@@ -102,7 +114,8 @@ begin
   if v_room.turn_ends_at is null then
     raise exception 'turn_not_started';
   end if;
-  if now() > v_room.turn_ends_at then
+  -- Expiry is judged now, under the lock. The turn is over from turn_ends_at onwards.
+  if clock_timestamp() >= v_room.turn_ends_at then
     raise exception 'turn_over';
   end if;
   return v_room;
@@ -130,7 +143,7 @@ begin
   end if;
 
   update public.rooms
-     set turn_ends_at = now() + turn_seconds * interval '1 second',
+     set turn_ends_at = clock_timestamp() + turn_seconds * interval '1 second',
          turn_got = 0,
          turn_skips = 0,
          last_activity_at = now()
@@ -141,7 +154,7 @@ end;
 $$;
 
 -- got_it: score the current slip, return the next one (null when the pile is empty). ---------------
-create function public.got_it()
+create function public.got_it(p_slip_id uuid default null)
 returns jsonb
 language plpgsql
 security definer
@@ -151,6 +164,12 @@ declare
   v_room public.rooms := public._lock_running_turn();
   v_left int;
 begin
+  -- Bound to the slip the clue-giver saw: a duplicate or stale request changes nothing.
+  if p_slip_id is not null and p_slip_id is distinct from
+       (select id from public.slips where room_id = v_room.id and is_current) then
+    return public._current_slip_json(v_room.id);
+  end if;
+
   update public.slips
      set in_pile = false,
          is_current = false,
@@ -179,7 +198,7 @@ end;
 $$;
 
 -- skip_slip: the slip stays in the pile but moves to the back; returns the next one. -----------------
-create function public.skip_slip()
+create function public.skip_slip(p_slip_id uuid default null)
 returns jsonb
 language plpgsql
 security definer
@@ -191,6 +210,10 @@ begin
   if v_room.skip_mode = 'off'
      or (v_room.skip_mode = 'one_per_turn' and v_room.turn_skips >= 1) then
     raise exception 'skip_not_allowed';
+  end if;
+  if p_slip_id is not null and p_slip_id is distinct from
+       (select id from public.slips where room_id = v_room.id and is_current) then
+    return public._current_slip_json(v_room.id);
   end if;
 
   update public.slips
@@ -229,7 +252,7 @@ begin
   if v_room.phase <> 'playing'
      or v_room.turn_player_id is distinct from v_uid
      or v_room.turn_ends_at is null
-     or now() > v_room.turn_ends_at then
+     or clock_timestamp() >= v_room.turn_ends_at then
     return null;
   end if;
 
@@ -254,7 +277,7 @@ begin
   if v_room.phase <> 'playing' or v_room.turn_ends_at is null then
     return;
   end if;
-  if now() < v_room.turn_ends_at then
+  if clock_timestamp() < v_room.turn_ends_at then
     raise exception 'deadline_not_reached';
   end if;
 
@@ -264,8 +287,8 @@ $$;
 
 grant execute on function
   public.start_turn(),
-  public.got_it(),
-  public.skip_slip(),
+  public.got_it(uuid),
+  public.skip_slip(uuid),
   public.current_slip(),
   public.end_turn()
 to authenticated;
