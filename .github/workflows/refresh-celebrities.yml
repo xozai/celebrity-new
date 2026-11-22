@@ -42,16 +42,20 @@ jobs:
             echo "Error: celebrities.csv not found after build."
             exit 1
           fi
-          # Total lines minus CSV header line
-          lines=$(wc -l < tools/celebrity-list/celebrities.csv)
-          rows=$((lines - 1))
-          echo "Successfully built $rows celebrity recommendations."
+          # Count parsed CSV records rather than physical lines to handle multiline fields (Finding 8)
+          rows=$(python3 -c "
+          import csv
+          with open('tools/celebrity-list/celebrities.csv', 'r', encoding='utf-8') as f:
+              print(sum(1 for _ in csv.DictReader(f)))
+          ")
+          echo "Successfully built $rows valid celebrity records."
           if [ "$rows" -lt 2000 ]; then
-            echo "Error: built list contains $rows rows, which is fewer than the 2,000 threshold. Aborting load."
+            echo "Error: built list contains $rows records, fewer than the 2,000 threshold. Aborting load."
             exit 1
           fi
 
       - name: Load celebrities into database
+        # Require designated production secret explicitly to prevent destructive sync to dev DB (Finding 8)
         env:
-          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL || secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
         run: python3 tools/celebrity-list/load.py tools/celebrity-list/celebrities.csv --min-rows 2000
