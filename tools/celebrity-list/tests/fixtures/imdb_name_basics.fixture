@@ -1,0 +1,51 @@
+nconst	primaryName	birthYear	deathYear	primaryProfession	knownForTitles
+nm0000001	Leonardo DiCaprio	1974	\N	actor,producer	tt0000004,tt0000017,tt0000018,tt0000019
+nm0000002	Christopher Nolan	1970	\N	director,writer,producer	tt0000004,tt0000005,tt0000011,tt0000020
+nm0000003	Quentin Tarantino	1963	\N	director,writer,actor	tt0000006,tt0000014,tt0000015,tt0000024
+nm0000004	Martin Scorsese	1942	\N	director,producer,writer	tt0000010,tt0000017,tt0000018,tt0000026
+nm0000005	Tom Hanks	1956	\N	actor,producer,director	tt0000008,tt0000030,tt0000031,tt0000032
+nm0000006	Brad Pitt	1963	\N	actor,producer	tt0000006,tt0000007,tt0000015,tt0000016
+nm0000007	Keanu Reeves	1964	\N	actor,producer	tt0000009
+nm0000008	Christian Bale	1974	\N	actor,producer	tt0000005,tt0000012
+nm0000009	Robert De Niro	1943	\N	actor,producer,director	tt0000010,tt0000026,tt0000027,tt0000028
+nm0000010	Adult Film Actor Only	1980	\N	actor	tt0000099,tt0000100
+nm0000011	Mixed Adult Actor	1985	\N	actor	tt0000004,tt0000099
+nm0000012	Unknown Actor No Votes	1990	\N	actor	tt9999999
+nm0000013	Ethan Coen	1957	\N	writer,producer,director	tt0000037,tt0000038,tt0000039,tt0000040
+nm0000014	Joel Coen	1954	\N	director,writer,producer	tt0000037,tt0000038,tt0000039,tt0000040
+nm0000015	Cillian Murphy	1976	\N	actor,producer	tt0000004,tt0000005,tt0000020,tt0000022
+nm0000016	Matt Damon	1970	\N	actor,writer,producer	tt0000011,tt0000017,tt0000020,tt0000032
+nm0000017	Morgan Freeman	1937	\N	actor,producer	tt0000005,tt0000016
+nm0000018	Samuel L. Jackson	1948	\N	actor,producer	tt0000006,tt0000014
+nm0000019	Al Pacino	1940	\N	actor,director	tt0000010,tt0000029
+nm0000020	Margot Robbie	1990	\N	actress,producer	tt0000018
+nm0000021	Heath Ledger	1979	2008	actor	tt0000005
+nm0000022	Uma Thurman	1970	\N	actress,producer	tt0000006,tt0000024
+nm0000023	Harvey Keitel	1939	\N	actor,producer	tt0000006,tt0000025,tt0000026,tt0000029
+nm0000024	Joe Pesci	1943	\N	actor	tt0000010,tt0000027,tt0000028,tt0000029
+nm0000025	Matthew McConaughey	1969	\N	actor,producer	tt0000011,tt0000018
+nm0000026	Jessica Chastain	1977	\N	actress,producer	tt0000011
+nm0000027	Anne Hathaway	1982	\N	actress,producer	tt0000005,tt0000011
+nm0000028	Tom Hardy	1977	\N	actor,producer	tt0000004,tt0000005,tt0000022
+nm0000029	Marion Cotillard	1975	\N	actress	tt0000004,tt0000005
+nm0000030	Joseph Gordon-Levitt	1981	\N	actor,director,producer	tt0000004,tt0000005
+nm0000031	Michael Caine	1933	\N	actor,producer	tt0000004,tt0000005,tt0000011,tt0000012
+nm0000032	Gary Oldman	1958	\N	actor,director,producer	tt0000005,tt0000020
+nm0000033	Emily Blunt	1983	\N	actress	tt0000020
+nm0000034	Florence Pugh	1996	\N	actress	tt0000020
+nm0000035	Robert Downey Jr.	1965	\N	actor,producer	tt0000020
+nm0000036	Kenneth Branagh	1960	\N	actor,director,producer	tt0000020,tt0000021,tt0000022
+nm0000037	Jack Nicholson	1937	\N	actor,producer,director	tt0000017
+nm0000038	Mark Wahlberg	1971	\N	actor,producer	tt0000017
+nm0000039	Jonah Hill	1983	\N	actor,producer,writer	tt0000014,tt0000018
+nm0000040	Christoph Waltz	1956	\N	actor,director	tt0000014,tt0000015
+nm0000041	Jamie Foxx	1967	\N	actor,producer	tt0000014
+nm0000042	Kerry Washington	1977	\N	actress,producer	tt0000014
+nm0000043	Eli Roth	1972	\N	actor,director,producer	tt0000015
+nm0000044	Diane Kruger	1976	\N	actress	tt0000015
+nm0000045	John Travolta	1954	\N	actor,producer	tt0000006
+nm0000046	Bruce Willis	1955	\N	actor,producer	tt0000006
+nm0000047	Edward Norton	1969	\N	actor,producer,director	tt0000007
+nm0000048	Helena Bonham Carter	1966	\N	actress	tt0000007
+nm0000049	David Fincher	1962	\N	director,producer	tt0000007,tt0000016
+nm0000050	Robin Wright	1966	\N	actress,director,producer	tt0000008

@@ -1,0 +1,44 @@
+tconst	titleType	primaryTitle	originalTitle	isAdult	startYear	endYear	runtimeMinutes	genres
+tt0000001	movie	Carmencita	Carmencita	0	1894	\N	1	Documentary,Short
+tt0000002	short	Le clown et ses chiens	Le clown et ses chiens	0	1892	\N	5	Animation,Short
+tt0000003	movie	Pauvre Pierrot	Pauvre Pierrot	0	1892	\N	4	Animation,Comedy,Short
+tt0000004	movie	Inception	Inception	0	2010	\N	148	Action,Adventure,Sci-Fi
+tt0000005	movie	The Dark Knight	The Dark Knight	0	2008	\N	152	Action,Crime,Drama
+tt0000006	movie	Pulp Fiction	Pulp Fiction	0	1994	\N	154	Crime,Drama
+tt0000007	movie	Fight Club	Fight Club	0	1999	\N	139	Drama
+tt0000008	movie	Forrest Gump	Forrest Gump	0	1994	\N	142	Drama,Romance
+tt0000009	movie	The Matrix	The Matrix	0	1999	\N	136	Action,Sci-Fi
+tt0000010	movie	Goodfellas	Goodfellas	0	1990	\N	145	Biography,Crime,Drama
+tt0000011	movie	Interstellar	Interstellar	0	2014	\N	169	Adventure,Drama,Sci-Fi
+tt0000012	movie	The Prestige	The Prestige	0	2006	\N	130	Drama,Mystery,Sci-Fi
+tt0000013	movie	Memento	Memento	0	2000	\N	113	Mystery,Thriller
+tt0000014	movie	Django Unchained	Django Unchained	0	2012	\N	165	Drama,Western
+tt0000015	movie	Inglourious Basterds	Inglourious Basterds	0	2009	\N	153	Adventure,Drama,War
+tt0000016	movie	Se7en	Se7en	0	1995	\N	127	Crime,Drama,Mystery
+tt0000017	movie	The Departed	The Departed	0	2006	\N	151	Crime,Drama,Thriller
+tt0000018	movie	The Wolf of Wall Street	The Wolf of Wall Street	0	2013	\N	180	Biography,Comedy,Crime
+tt0000019	movie	Shutter Island	Shutter Island	0	2010	\N	138	Mystery,Thriller
+tt0000020	movie	Oppenheimer	Oppenheimer	0	2023	\N	180	Biography,Drama,History
+tt0000021	movie	Tenet	Tenet	0	2020	\N	150	Action,Sci-Fi,Thriller
+tt0000022	movie	Dunkirk	Dunkirk	0	2017	\N	106	Action,Drama,History
+tt0000023	movie	Batman Begins	Batman Begins	0	2005	\N	140	Action,Crime,Drama
+tt0000024	movie	Kill Bill: Vol. 1	Kill Bill: Vol. 1	0	2003	\N	111	Action,Crime,Drama
+tt0000025	movie	Reservoir Dogs	Reservoir Dogs	0	1992	\N	99	Crime,Thriller
+tt0000026	movie	Taxi Driver	Taxi Driver	0	1976	\N	114	Crime,Drama
+tt0000027	movie	Raging Bull	Raging Bull	0	1980	\N	129	Biography,Drama,Sport
+tt0000028	movie	Casino	Casino	0	1995	\N	178	Crime,Drama
+tt0000029	movie	The Irishman	The Irishman	0	2019	\N	209	Biography,Crime,Drama
+tt0000030	movie	Catch Me If You Can	Catch Me If You Can	0	2002	\N	141	Biography,Crime,Drama
+tt0000031	movie	Cast Away	Cast Away	0	2000	\N	143	Adventure,Drama,Romance
+tt0000032	movie	Saving Private Ryan	Saving Private Ryan	0	1998	\N	169	Drama,War
+tt0000033	movie	Apollo 13	Apollo 13	0	1995	\N	140	Adventure,Drama,History
+tt0000034	movie	Big	Big	0	1988	\N	104	Comedy,Drama,Fantasy
+tt0000035	movie	Toy Story	Toy Story	0	1995	\N	81	Animation,Adventure,Comedy
+tt0000036	movie	The Green Mile	The Green Mile	0	1999	\N	189	Crime,Drama,Fantasy
+tt0000037	movie	Fargo	Fargo	0	1996	\N	98	Crime,Thriller
+tt0000038	movie	No Country for Old Men	No Country for Old Men	0	2007	\N	122	Crime,Drama,Thriller
+tt0000039	movie	The Big Lebowski	The Big Lebowski	0	1998	\N	117	Comedy,Crime
+tt0000040	movie	Inside Llewyn Davis	Inside Llewyn Davis	0	2013	\N	104	Drama,Music
+tt0000099	movie	Adult Only Title 1	Adult Only Title 1	1	2000	\N	90	Adult
+tt0000100	movie	Adult Only Title 2	Adult Only Title 2	1	2005	\N	95	Adult
+tt0000101	movie	Adult Only Title 3	Adult Only Title 3	1	2010	\N	85	Adult
