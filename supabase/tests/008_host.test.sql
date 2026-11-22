@@ -1,0 +1,260 @@
+-- Task 1.8: transfer_host, kick_player, claim_host, assign_spectator, delete_my_data.
+begin;
+
+create extension if not exists pgtap with schema extensions;
+
+create function pg_temp.u(n int) returns uuid language sql as $$
+  select ('00000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid
+$$;
+grant execute on function pg_temp.u(int) to public;
+
+create function pg_temp.act_as(u uuid) returns void language plpgsql as $$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  perform set_config('role', 'authenticated', true);
+end $$;
+grant execute on function pg_temp.act_as(uuid) to public;
+
+create function pg_temp.act_admin() returns void language plpgsql as $$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+end $$;
+grant execute on function pg_temp.act_admin() to public;
+
+-- Four players P1..P4 on users base+1..base+4 (P1, P2 team 0; P3, P4 team 1), one slip each, P1 hosts.
+-- n_submit players submit, in seat order. With n_submit = 0 the room is left in the lobby.
+create function pg_temp.new_game(base int, n_submit int) returns void language plpgsql as $$
+declare
+  v_code text;
+begin
+  perform pg_temp.act_as(pg_temp.u(base + 1));
+  v_code := public.create_room('P1') -> 'room' ->> 'code';
+  for i in 2..4 loop
+    perform pg_temp.act_as(pg_temp.u(base + i));
+    perform public.join_room(v_code, 'P' || i);
+  end loop;
+  if n_submit = 0 then
+    return;
+  end if;
+  perform pg_temp.act_as(pg_temp.u(base + 1));
+  perform public.set_teams(jsonb_build_object(
+    pg_temp.u(base + 1)::text, 0, pg_temp.u(base + 2)::text, 0,
+    pg_temp.u(base + 3)::text, 1, pg_temp.u(base + 4)::text, 1));
+  perform public.update_settings('{"slips_per_player": 1}'::jsonb);
+  perform public.start_game();
+  for i in 1..n_submit loop
+    perform pg_temp.act_as(pg_temp.u(base + i));
+    perform public.submit_slips(array['S' || i]);
+  end loop;
+end $$;
+grant execute on function pg_temp.new_game(int, int) to public;
+
+create function pg_temp.room_of(p_user uuid) returns uuid language sql security definer as $$
+  select room_id from public.players where user_id = p_user
+$$;
+grant execute on function pg_temp.room_of(uuid) to public;
+
+create function pg_temp.code_of(p_user uuid) returns text language sql security definer as $$
+  select r.code from public.rooms r join public.players p on p.room_id = r.id where p.user_id = p_user
+$$;
+grant execute on function pg_temp.code_of(uuid) to public;
+
+-- Start the turn, score n slips, and optionally let the clock run out and end it.
+create function pg_temp.play_turn(p_user uuid, n int, expire boolean) returns void language plpgsql as $$
+begin
+  perform pg_temp.act_as(p_user);
+  perform public.start_turn();
+  for i in 1..n loop
+    perform public.got_it();
+  end loop;
+  if expire then
+    perform pg_temp.act_admin();
+    update public.rooms set turn_ends_at = now() - interval '1 second' where id = pg_temp.room_of(p_user);
+    perform pg_temp.act_as(p_user);
+    perform public.end_turn();
+  end if;
+end $$;
+grant execute on function pg_temp.play_turn(uuid, int, boolean) to public;
+
+select plan(42);
+
+-- A. Lobby room, users 1-4 ---------------------------------------------------------------------------------
+select pg_temp.new_game(0, 0);
+
+select pg_temp.act_as(pg_temp.u(2));
+select throws_ok(format($$ select public.transfer_host(%L) $$, pg_temp.u(3)), 'P0001', 'not_host', 'transfer_host rejects a non-host');
+select throws_ok(format($$ select public.kick_player(%L) $$, pg_temp.u(3)), 'P0001', 'not_host', 'kick_player rejects a non-host');
+
+select pg_temp.act_as(pg_temp.u(1));
+select throws_ok(format($$ select public.transfer_host(%L) $$, pg_temp.u(1)), 'P0001', 'cannot_target_self', 'cannot transfer the host role to yourself');
+select throws_ok(format($$ select public.transfer_host(%L) $$, pg_temp.u(99)), 'P0001', 'player_not_found', 'transfer_host to a stranger rejected');
+select throws_ok(format($$ select public.kick_player(%L) $$, pg_temp.u(1)), 'P0001', 'cannot_target_self', 'cannot kick yourself');
+select throws_ok(format($$ select public.kick_player(%L) $$, pg_temp.u(99)), 'P0001', 'player_not_found', 'kick_player on a stranger rejected');
+
+select public.transfer_host(pg_temp.u(2));
+select pg_temp.act_admin();
+select is((select host_id from public.rooms where id = pg_temp.room_of(pg_temp.u(1))), pg_temp.u(2), 'transfer_host hands over the room');
+select pg_temp.act_as(pg_temp.u(1));
+select throws_ok(format($$ select public.kick_player(%L) $$, pg_temp.u(3)), 'P0001', 'not_host', 'the old host lost their powers');
+
+select pg_temp.act_as(pg_temp.u(2));
+select public.kick_player(pg_temp.u(4));
+select pg_temp.act_admin();
+select is((select count(*)::int from public.players where user_id = pg_temp.u(4)), 0, 'kick_player removes the player');
+select pg_temp.act_as(pg_temp.u(4));
+select throws_ok(format($$ select public.get_snapshot(%L) $$, pg_temp.room_of(pg_temp.u(1))), 'P0001', 'not_member', 'a kicked player is no longer a member');
+
+-- B. Kicking during submission, users 21-24 ----------------------------------------------------------------------
+select pg_temp.new_game(20, 2);
+select pg_temp.act_as(pg_temp.u(21));
+select public.kick_player(pg_temp.u(22));
+select pg_temp.act_admin();
+select is(
+  (select array_agg(name) from public.slips), array['S1'], 'kicking during submitting removes that player''s slips');
+select is((select phase from public.rooms where id = pg_temp.room_of(pg_temp.u(21))), 'submitting', 'the room keeps waiting for the others');
+
+-- Once everyone left standing has submitted, the game starts.
+select pg_temp.new_game(60, 3);
+select pg_temp.act_as(pg_temp.u(61));
+select public.kick_player(pg_temp.u(64));
+select pg_temp.act_admin();
+select row_eq(
+  $$ select phase, round, pile_count from public.rooms where id = pg_temp.room_of(pg_temp.u(61)) $$,
+  row('playing'::text, 1::smallint, 3), 'kicking the last player who had not submitted starts round 1');
+
+-- C. Kicking in play, users 31-34 ---------------------------------------------------------------------------------------
+select pg_temp.new_game(30, 4);
+select pg_temp.play_turn(pg_temp.u(31), 0, true);
+select pg_temp.act_admin();
+select is((select turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(31))), pg_temp.u(33), 'setup: Cy is up');
+select pg_temp.play_turn(pg_temp.u(33), 1, false);
+select pg_temp.act_as(pg_temp.u(31));
+select public.kick_player(pg_temp.u(33));
+select pg_temp.act_admin();
+select row_eq(
+  $$ select count(*)::int, max(player_name), max(cardinality(guessed)) from public.turns where player_id = pg_temp.u(33) $$,
+  row(1, 'P3'::text, 1), 'kicking the clue-giver closes their turn and keeps what they scored');
+select row_eq(
+  $$ select current_team, turn_player_id, turn_ends_at, pile_count, turn_got from public.rooms where id = pg_temp.room_of(pg_temp.u(31)) $$,
+  row(0::smallint, pg_temp.u(32), null::timestamptz, 3, 0),
+  'and the turn passes to the other team''s next player; the pile is intact');
+select row_eq(
+  $$ select count(*)::int, count(*) filter (where author_id is null)::int, count(*) filter (where is_current)::int
+       from public.slips where room_id = pg_temp.room_of(pg_temp.u(31)) $$,
+  row(4, 1, 0), 'the kicked player''s slips stay in the game, anonymised, and nothing is left current');
+
+-- Kicking the player who is up but has not started re-picks the turn.
+select pg_temp.act_as(pg_temp.u(31));
+select public.kick_player(pg_temp.u(32));
+select pg_temp.act_admin();
+select is(
+  (select turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(31))), pg_temp.u(31), 'kicking the player who is up picks the next one');
+
+-- The host leaving mid-turn: the turn is closed and the host role moves on.
+select pg_temp.new_game(40, 4);
+select pg_temp.act_as(pg_temp.u(41));
+select public.start_turn();
+select public.got_it();
+select public.leave_room();
+select pg_temp.act_admin();
+select row_eq(
+  $$ select host_id, current_team, turn_player_id, turn_ends_at from public.rooms where id = pg_temp.room_of(pg_temp.u(42)) $$,
+  row(pg_temp.u(42), 1::smallint, pg_temp.u(43), null::timestamptz),
+  'when the host leaves mid-turn the turn ends, the next seat hosts and the other team is up');
+select is(
+  (select cardinality(guessed) from public.turns where player_id = pg_temp.u(41)), 1, 'and their scored slip is in the history');
+
+-- D. claim_host ---------------------------------------------------------------------------------------------------------
+select pg_temp.new_game(70, 0);
+select pg_temp.act_as(pg_temp.u(72));
+select throws_ok($$ select public.claim_host() $$, 'P0001', 'host_still_active', 'claim_host rejected while the host is fresh');
+select pg_temp.act_admin();
+update public.players set last_seen_at = now() - interval '40 seconds' where user_id = pg_temp.u(71);
+select pg_temp.act_as(pg_temp.u(72));
+select throws_ok($$ select public.claim_host() $$, 'P0001', 'host_still_active', 'still rejected at 40 seconds');
+select pg_temp.act_admin();
+update public.players set last_seen_at = now() - interval '60 seconds' where user_id = pg_temp.u(71);
+select pg_temp.act_as(pg_temp.u(99));
+select throws_ok($$ select public.claim_host() $$, 'P0001', 'not_member', 'a stranger cannot claim the host role');
+select pg_temp.act_as(pg_temp.u(71));
+select throws_ok($$ select public.claim_host() $$, 'P0001', 'already_host', 'the host cannot claim their own role');
+select pg_temp.act_as(pg_temp.u(72));
+select public.claim_host();
+select pg_temp.act_admin();
+select is((select host_id from public.rooms where id = pg_temp.room_of(pg_temp.u(72))), pg_temp.u(72), 'claim_host is accepted once the host is stale');
+
+-- E. assign_spectator, users 51-54 plus late joiner 55 ----------------------------------------------------------------------
+select pg_temp.new_game(50, 4);
+select pg_temp.act_as(pg_temp.u(55));
+select public.join_room(pg_temp.code_of(pg_temp.u(51)), 'Late');
+select pg_temp.act_admin();
+select is((select role from public.players where user_id = pg_temp.u(55)), 'spectator', 'setup: the late joiner is a spectator');
+
+select pg_temp.act_as(pg_temp.u(52));
+select throws_ok(format($$ select public.assign_spectator(%L, 1) $$, pg_temp.u(55)), 'P0001', 'not_host', 'assign_spectator rejects a non-host');
+select pg_temp.act_as(pg_temp.u(51));
+select throws_ok(format($$ select public.assign_spectator(%L, 2) $$, pg_temp.u(55)), 'P0001', 'invalid_team', 'assign_spectator rejects a bad team');
+select throws_ok(format($$ select public.assign_spectator(%L, 1) $$, pg_temp.u(52)), 'P0001', 'not_spectator', 'assign_spectator rejects someone who is already a player');
+select throws_ok(format($$ select public.assign_spectator(%L, 1) $$, pg_temp.u(99)), 'P0001', 'player_not_found', 'assign_spectator rejects a stranger');
+
+select public.start_turn();
+select throws_ok(format($$ select public.assign_spectator(%L, 1) $$, pg_temp.u(55)), 'P0001', 'turn_active', 'assign_spectator rejected while a turn is running');
+
+select pg_temp.act_admin();
+update public.rooms set turn_ends_at = now() - interval '1 second' where id = pg_temp.room_of(pg_temp.u(51));
+select pg_temp.act_as(pg_temp.u(51));
+select public.end_turn();
+select public.assign_spectator(pg_temp.u(55), 1);
+select pg_temp.act_admin();
+select row_eq(
+  $$ select role, team from public.players where user_id = pg_temp.u(55) $$,
+  row('player'::text, 1::smallint), 'between turns the spectator joins the chosen team');
+select is(
+  (select turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(51))), pg_temp.u(53),
+  'and the player who is up is unchanged');
+
+-- F. delete_my_data -------------------------------------------------------------------------------------------------------------
+insert into auth.users (id, aud, role) values (pg_temp.u(82), 'authenticated', 'authenticated');
+select pg_temp.new_game(80, 2);
+select pg_temp.act_as(pg_temp.u(82));
+select public.delete_my_data();
+select pg_temp.act_admin();
+select is((select count(*)::int from public.players where user_id = pg_temp.u(82)), 0, 'delete_my_data removes the player');
+select is((select count(*)::int from public.slips where room_id = pg_temp.room_of(pg_temp.u(81))), 1, 'and their slips while the room is still collecting them');
+select is((select count(*)::int from auth.users where id = pg_temp.u(82)), 0, 'and the anonymous account');
+
+-- The host deleting their data mid-game: slips stay (anonymous), the host role moves on.
+select pg_temp.new_game(90, 4);
+select pg_temp.act_as(pg_temp.u(91));
+select public.delete_my_data();
+select pg_temp.act_admin();
+select row_eq(
+  $$ select host_id, created_by from public.rooms where id = pg_temp.room_of(pg_temp.u(92)) $$,
+  row(pg_temp.u(92), null::uuid), 'the host role moves on and the room no longer points at the deleted user');
+select is(
+  (select count(*)::int from public.slips where room_id = pg_temp.room_of(pg_temp.u(92)) and author_id = pg_temp.u(91)), 0,
+  'no slip is attributed to the deleted user');
+select is((select count(*)::int from public.slips where room_id = pg_temp.room_of(pg_temp.u(92))), 4, 'but the pile is intact');
+
+select pg_temp.act_as(pg_temp.u(91));
+select lives_ok($$ select public.delete_my_data() $$, 'delete_my_data is safe to repeat');
+
+-- Everything above is for signed-in users only ------------------------------------------------------------------------------------
+select pg_temp.act_admin();
+select is(
+  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname in ('transfer_host', 'kick_player', 'claim_host', 'assign_spectator', 'delete_my_data')
+      and has_function_privilege('anon', p.oid, 'execute')),
+  0, 'anon cannot execute the host-management functions');
+select is(
+  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname like '\_%'
+      and (has_function_privilege('authenticated', p.oid, 'execute') or has_function_privilege('anon', p.oid, 'execute'))),
+  0, 'internal helper functions are not callable by clients');
+
+select * from finish();
+
+rollback;
