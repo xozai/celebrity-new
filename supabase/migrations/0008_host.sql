@@ -16,14 +16,41 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
-  v_room public.rooms;
+  v_room   public.rooms;
+  v_team   smallint;
+  v_seat   int;
+  v_size   int;
+  v_pos    int;
+  v_cursor int;
 begin
   select * into v_room from public.rooms where id = p_room_id;
+  select seat into v_seat from public.players where room_id = p_room_id and user_id = p_user_id;
 
   if v_room.phase = 'playing'
      and v_room.turn_player_id = p_user_id
      and v_room.turn_ends_at is not null then
     perform public._finish_turn(p_room_id);
+    select * into v_room from public.rooms where id = p_room_id;
+  end if;
+
+  -- Keep the rotation cursor on the same person. turn_idx[team] points at the next clue-giver
+  -- (position idx mod size, seats in order). When someone ahead of the cursor leaves, everyone
+  -- shifts down one place, so the cursor moves down with them. If the person AT the cursor leaves,
+  -- the next player slides into that place and the cursor stays.
+  select p.team into v_team from public.players p
+   where p.room_id = p_room_id and p.user_id = p_user_id and p.role = 'player';
+  if v_team is not null then
+    select count(*), count(*) filter (where p.seat < v_seat)
+      into v_size, v_pos
+      from public.players p
+     where p.room_id = p_room_id and p.team = v_team and p.role = 'player';
+    v_cursor := mod(v_room.turn_idx[v_team + 1], v_size);
+    if v_pos < v_cursor then
+      v_cursor := v_cursor - 1;
+    end if;
+    update public.rooms
+       set turn_idx[v_team + 1] = case when v_size > 1 then mod(v_cursor, v_size - 1) else 0 end
+     where id = p_room_id;
   end if;
 
   if v_room.phase = 'submitting' then
@@ -137,6 +164,8 @@ as $$
 declare
   v_room   public.rooms := public._lock_host_room();
   v_target public.players;
+  v_size   int;
+  v_pos    int;
 begin
   if p_team is null or p_team not in (0, 1) then
     raise exception 'invalid_team';
@@ -150,6 +179,18 @@ begin
   end if;
   if v_room.turn_ends_at is not null then
     raise exception 'turn_active';
+  end if;
+
+  -- Slot the newcomer into the rotation without changing who is up next: if they sit at or before
+  -- the cursor, everyone from the cursor on shifts up one place, so the cursor moves with them.
+  select count(*), count(*) filter (where p.seat < v_target.seat)
+    into v_size, v_pos
+    from public.players p
+   where p.room_id = v_room.id and p.team = p_team and p.role = 'player';
+  if v_size > 0 and v_pos <= mod(v_room.turn_idx[p_team + 1], v_size) then
+    update public.rooms
+       set turn_idx[p_team + 1] = mod(turn_idx[p_team + 1], v_size) + 1
+     where id = v_room.id;
   end if;
 
   update public.players

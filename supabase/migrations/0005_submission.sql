@@ -19,16 +19,46 @@ as $$
    where s.rn = mod(p_idx, s.n);
 $$;
 
--- Sets turn_player_id for whoever is up next (current_team and turn_idx must already be right). ---
+-- Decides who is up next. A team can take a turn only with a clue-giver and at least one
+-- teammate to guess (two or more players). If the team whose turn it is cannot, the other team
+-- takes the turn; if neither can, turn_player_id is null and the game waits for the host
+-- (assign_spectator calls this again). current_team and turn_idx must already be right. ----------------
 create function public._set_turn_player(p_room_id uuid)
 returns void
-language sql
+language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
-  update public.rooms r
-     set turn_player_id = public._pick_turn_player(r.id, r.current_team, r.turn_idx[r.current_team + 1])
-   where r.id = p_room_id and r.current_team is not null;
+declare
+  v_room public.rooms;
+  v_n0   int;
+  v_n1   int;
+  v_team int;
+begin
+  select * into v_room from public.rooms where id = p_room_id;
+  if v_room.current_team is null then
+    return;
+  end if;
+
+  select count(*) filter (where team = 0), count(*) filter (where team = 1)
+    into v_n0, v_n1
+    from public.players where room_id = p_room_id and role = 'player';
+
+  v_team := v_room.current_team;
+  if (case v_team when 0 then v_n0 else v_n1 end) < 2 then
+    if (case v_team when 0 then v_n1 else v_n0 end) >= 2 then
+      v_team := 1 - v_team;
+    else
+      update public.rooms set turn_player_id = null where id = p_room_id;
+      return;
+    end if;
+  end if;
+
+  update public.rooms
+     set current_team = v_team,
+         turn_player_id = public._pick_turn_player(id, v_team, turn_idx[v_team + 1])
+   where id = p_room_id;
+end;
 $$;
 
 -- Starts a round: every slip goes back into the pile in a fresh random order. Teams alternate

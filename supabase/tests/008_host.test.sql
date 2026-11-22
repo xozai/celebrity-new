@@ -62,6 +62,30 @@ begin
 end $$;
 grant execute on function pg_temp.new_game(int, int) to public;
 
+-- Six players P1..P6 on users base+1..base+6: P1-P3 team 0, P4-P6 team 1. One slip each, P1 hosts, round 1 running.
+create function pg_temp.new_game6(base int) returns void language plpgsql as $$
+declare
+  v_code text;
+begin
+  perform pg_temp.act_as(pg_temp.u(base + 1));
+  v_code := public.create_room('P1') -> 'room' ->> 'code';
+  for i in 2..6 loop
+    perform pg_temp.act_as(pg_temp.u(base + i));
+    perform public.join_room(v_code, 'P' || i);
+  end loop;
+  perform pg_temp.act_as(pg_temp.u(base + 1));
+  perform public.set_teams(jsonb_build_object(
+    pg_temp.u(base + 1)::text, 0, pg_temp.u(base + 2)::text, 0, pg_temp.u(base + 3)::text, 0,
+    pg_temp.u(base + 4)::text, 1, pg_temp.u(base + 5)::text, 1, pg_temp.u(base + 6)::text, 1));
+  perform public.update_settings('{"slips_per_player": 1}'::jsonb);
+  perform public.start_game();
+  for i in 1..6 loop
+    perform pg_temp.act_as(pg_temp.u(base + i));
+    perform public.submit_slips(array['S' || i]);
+  end loop;
+end $$;
+grant execute on function pg_temp.new_game6(int) to public;
+
 create function pg_temp.room_of(p_user uuid) returns uuid language sql security definer as $$
   select room_id from public.players where user_id = p_user
 $$;
@@ -89,7 +113,7 @@ begin
 end $$;
 grant execute on function pg_temp.play_turn(uuid, int, boolean) to public;
 
-select plan(55);
+select plan(61);
 
 -- A. Lobby room, users 1-4 ---------------------------------------------------------------------------------
 select pg_temp.new_game(0, 0);
@@ -161,7 +185,8 @@ select pg_temp.act_as(pg_temp.u(31));
 select public.kick_player(pg_temp.u(32));
 select pg_temp.act_admin();
 select is(
-  (select turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(31))), pg_temp.u(31), 'kicking the player who is up picks the next one');
+  (select turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(31))), null,
+  'with one player left on each team nobody can guess, so nobody is up');
 
 -- The host leaving mid-turn: the turn is closed and the host role moves on.
 select pg_temp.new_game(40, 4);
@@ -277,6 +302,67 @@ select row_eq(
   row(2, 2), 'after a completed turn''s player deletes too, no turn names anyone');
 select is(
   (select scores -> 0 from public.rooms where id = pg_temp.room_of(pg_temp.u(122))), '[1,1]'::jsonb, 'scores are unchanged');
+
+-- I. Rotation survives people leaving (review finding 8) -------------------------------------------------------------------
+-- Mid-round: Ann (first of three) has played and leaves; the next turn for that team is Bob, not Cy.
+select pg_temp.new_game6(130);
+select pg_temp.play_turn(pg_temp.u(131), 0, true);
+select pg_temp.act_as(pg_temp.u(131));
+select public.transfer_host(pg_temp.u(134));
+select pg_temp.act_as(pg_temp.u(134));
+select public.kick_player(pg_temp.u(131));
+select pg_temp.play_turn(pg_temp.u(134), 0, true);
+select pg_temp.act_admin();
+select row_eq(
+  $$ select current_team, turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(132)) $$,
+  row(0::smallint, pg_temp.u(132)),
+  'after the first of three leaves, the next clue-giver on that team is the second, not the third');
+
+-- Across a round boundary: the same, with the removal between rounds.
+select pg_temp.new_game6(140);
+select pg_temp.play_turn(pg_temp.u(141), 6, false);
+select pg_temp.act_admin();
+select is((select phase from public.rooms where id = pg_temp.room_of(pg_temp.u(142))), 'round_end', 'setup: round 1 is over');
+select pg_temp.act_as(pg_temp.u(141));
+select public.transfer_host(pg_temp.u(144));
+select pg_temp.act_as(pg_temp.u(144));
+select public.kick_player(pg_temp.u(141));
+select public.start_next_round();
+select pg_temp.play_turn(pg_temp.u(144), 0, true);
+select pg_temp.act_admin();
+select row_eq(
+  $$ select round, current_team, turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(142)) $$,
+  row(2::smallint, 0::smallint, pg_temp.u(142)),
+  'a removal between rounds does not skip anyone either');
+
+-- A team with nobody left passes its turn to the other team.
+select pg_temp.new_game(150, 4);
+select pg_temp.play_turn(pg_temp.u(151), 0, true);
+select pg_temp.act_as(pg_temp.u(151));
+select public.kick_player(pg_temp.u(153));
+select public.kick_player(pg_temp.u(154));
+select pg_temp.act_admin();
+select row_eq(
+  $$ select current_team, turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(151)) $$,
+  row(0::smallint, pg_temp.u(152)),
+  'when the team that is up has nobody left, the other team takes the turn');
+
+-- When neither team can play, nobody is up, and assign_spectator gets the game going again.
+select pg_temp.act_as(pg_temp.u(151));
+select public.kick_player(pg_temp.u(152));
+select pg_temp.act_admin();
+select is(
+  (select turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(151))), null,
+  'with neither team able to field a clue-giver and a guesser, turn_player_id is null');
+select pg_temp.act_as(pg_temp.u(155));
+select public.join_room(pg_temp.code_of(pg_temp.u(151)), 'S5');
+select pg_temp.act_as(pg_temp.u(151));
+select public.assign_spectator(pg_temp.u(155), 0);
+select pg_temp.act_admin();
+select row_eq(
+  $$ select current_team, turn_player_id from public.rooms where id = pg_temp.room_of(pg_temp.u(151)) $$,
+  row(0::smallint, pg_temp.u(151)),
+  'assign_spectator recovers the game once a team can field a clue-giver and a guesser');
 
 -- G. Account identity (review finding 3) ---------------------------------------------------------------------------------------
 -- An anonymous account is deleted with its data, and the old token stops working.
