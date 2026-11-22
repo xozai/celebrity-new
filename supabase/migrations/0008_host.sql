@@ -188,6 +188,8 @@ begin
 
   update public.slips set author_id = null where author_id = v_uid;
   update public.rooms set created_by = null where created_by = v_uid;
+  -- Scores and results stay; the name and identity do not.
+  update public.turns set player_id = null, player_name = 'Former player' where player_id = v_uid;
   delete from auth.users where id = v_uid and is_anonymous;
 end;
 $$;

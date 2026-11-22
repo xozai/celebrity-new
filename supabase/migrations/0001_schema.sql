@@ -77,10 +77,12 @@ create table public.turns (
   room_id     uuid not null references public.rooms (id) on delete cascade,
   round       smallint not null check (round between 1 and 3),
   team        smallint not null check (team in (0, 1)),
-  player_id   uuid not null,
+  -- player_id is null (and player_name 'Former player') once that player has deleted their data.
+  player_id   uuid,
   player_name text not null,
   guessed     text[] not null default '{}',
-  skipped     text[] not null default '{}',
+  -- How many times the clue-giver skipped. Skipped slips go back into the pile, so no names here.
+  skipped     int not null default 0 check (skipped >= 0),
   ended_at    timestamptz not null default now()
 );
 

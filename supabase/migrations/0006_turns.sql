@@ -66,8 +66,7 @@ begin
                where room_id = v_room.id and user_id = v_room.turn_player_id), 'Unknown'),
     coalesce((select array_agg(name order by guessed_at, id) from public.slips
                where room_id = v_room.id and guessed_at is not null), '{}'),
-    coalesce((select array_agg(name order by id) from public.slips
-               where room_id = v_room.id and skipped_in_turn and guessed_at is null), '{}'),
+    v_room.turn_skips,
     clock_timestamp()
   );
 

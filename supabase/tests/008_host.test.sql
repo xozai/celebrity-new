@@ -89,7 +89,7 @@ begin
 end $$;
 grant execute on function pg_temp.play_turn(uuid, int, boolean) to public;
 
-select plan(51);
+select plan(55);
 
 -- A. Lobby room, users 1-4 ---------------------------------------------------------------------------------
 select pg_temp.new_game(0, 0);
@@ -251,6 +251,32 @@ select is((select count(*)::int from public.slips where room_id = pg_temp.room_o
 
 select pg_temp.act_as(pg_temp.u(91));
 select lives_ok($$ select public.delete_my_data() $$, 'delete_my_data is safe to repeat');
+
+-- H. Deleting a player keeps the scores but not the name (review finding 9) -------------------------------------------------
+select pg_temp.new_game(120, 4);
+select pg_temp.play_turn(pg_temp.u(121), 1, true);
+select pg_temp.act_as(pg_temp.u(123));
+select public.start_turn();
+select public.got_it();
+select public.delete_my_data();   -- during their own running turn
+select pg_temp.act_admin();
+select row_eq(
+  $$ select count(*) filter (where player_id is null and player_name = 'Former player')::int,
+            count(*) filter (where player_name = 'P1')::int,
+            count(*) filter (where player_id = pg_temp.u(123) or player_name = 'P3')::int
+       from public.turns where room_id = pg_temp.room_of(pg_temp.u(122)) $$,
+  row(1, 1, 0), 'a turn closed by deleting the player is anonymised; other history is untouched');
+select is(
+  (select max(cardinality(guessed)) from public.turns where player_id is null and room_id = pg_temp.room_of(pg_temp.u(122))), 1, 'and keeps what they scored');
+select pg_temp.act_as(pg_temp.u(121));
+select public.delete_my_data();
+select pg_temp.act_admin();
+select row_eq(
+  $$ select count(*) filter (where player_id is null and player_name = 'Former player')::int, count(*)::int
+       from public.turns where room_id = pg_temp.room_of(pg_temp.u(122)) $$,
+  row(2, 2), 'after a completed turn''s player deletes too, no turn names anyone');
+select is(
+  (select scores -> 0 from public.rooms where id = pg_temp.room_of(pg_temp.u(122))), '[1,1]'::jsonb, 'scores are unchanged');
 
 -- G. Account identity (review finding 3) ---------------------------------------------------------------------------------------
 -- An anonymous account is deleted with its data, and the old token stops working.

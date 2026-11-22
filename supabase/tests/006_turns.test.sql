@@ -23,7 +23,7 @@ grant execute on function pg_temp.act_admin() to public;
 create temp table ctx (k text primary key, v text);
 grant all on ctx to public;
 
-select plan(59);
+select plan(62);
 
 -- Room: Ann, Bob (team 0) | Cy, Di (team 1), three slips each, round 1 under way. -------------------
 select pg_temp.act_as('00000000-0000-0000-0000-000000000001');
@@ -166,7 +166,20 @@ select row_eq(
   row(1::smallint, 0::smallint, '00000000-0000-0000-0000-000000000001'::uuid, 'Ann'::text, 1, true),
   'end_turn writes the history row for Ann''s turn');
 select is((select guessed from public.turns), array[(select name from public.slips where id = (select (v::jsonb ->> 'id')::uuid from ctx where k = 's1'))], 'the history lists what was guessed');
-select ok((select cardinality(skipped) >= 1 from public.turns), 'the history lists what was skipped');
+select ok((select skipped >= 1 from public.turns), 'the history counts what was skipped');
+
+-- No skipped slip name may reach another player: those slips are still in the pile (review finding 4).
+select pg_temp.act_as('00000000-0000-0000-0000-000000000003');
+select is((select pg_typeof(skipped)::text from public.turns limit 1), 'integer', 'an opponent reading the turns table sees a count');
+select is(
+  jsonb_typeof(public.get_snapshot((select id from public.rooms)) -> 'turns' -> 0 -> 'skipped'), 'number',
+  'an opponent''s snapshot carries a count too');
+select is(
+  (select count(*)::int from jsonb_array_elements(public.get_snapshot((select id from public.rooms)) -> 'turns') t,
+                            jsonb_array_elements_text(t -> 'guessed') g
+    where g in (select v::jsonb ->> 'name' from ctx where k in ('s2', 's3'))),
+  0, 'and the history names only what was guessed, never the skipped slips');
+select pg_temp.act_admin();
 select ok(
   (select in_pile and not is_current from public.slips where id = (select (v::jsonb ->> 'id')::uuid from ctx where k = 's3') ),
   'the unfinished slip is back in the pile');
