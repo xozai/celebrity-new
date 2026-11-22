@@ -1,0 +1,43 @@
+# Names to never recommend in Celebrity game
+# Format: one name per line, comments start with #, blank lines ignored
+
+# Dictators and mass murderers
+Adolf Hitler
+Joseph Stalin
+Vladimir Lenin
+Mao Zedong
+Pol Pot
+Benito Mussolini
+Idi Amin
+Saddam Hussein
+Muammar Gaddafi
+Nicolae Ceausescu
+Francisco Franco
+Augusto Pinochet
+Kim Il Sung
+Kim Jong Il
+Bashar al-Assad
+
+# Terrorists and hate leaders
+Osama bin Laden
+Ayman al-Zawahiri
+Abu Bakr al-Baghdadi
+Timothy McVeigh
+Ted Kaczynski
+Anders Behring Breivik
+Brenton Tarrant
+
+# Serial killers and notorious criminals
+Jeffrey Dahmer
+Ted Bundy
+John Wayne Gacy
+Charles Manson
+Jack the Ripper
+Ed Gein
+Richard Ramirez
+Dennis Rader
+Aileen Wuornos
+Gary Ridgway
+David Berkowitz
+Harold Shipman
+Andrei Chikatilo
