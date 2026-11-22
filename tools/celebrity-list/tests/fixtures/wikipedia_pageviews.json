@@ -1,0 +1,23 @@
+{
+  "items": [
+    {
+      "project": "en.wikipedia",
+      "access": "all-access",
+      "year": "2024",
+      "month": "01",
+      "day": "all-days",
+      "articles": [
+        {"article": "Main_Page", "views": 150000000, "rank": 1},
+        {"article": "Special:Search", "views": 40000000, "rank": 2},
+        {"article": "Taylor_Swift", "views": 3500000, "rank": 3},
+        {"article": "Cillian_Murphy", "views": 2800000, "rank": 4},
+        {"article": "Oppenheimer_(film)", "views": 2500000, "rank": 5},
+        {"article": "Sherlock_Holmes", "views": 1800000, "rank": 6},
+        {"article": "Lionel_Messi", "views": 1500000, "rank": 7},
+        {"article": "Barack_Obama", "views": 1200000, "rank": 8},
+        {"article": "United_States", "views": 1100000, "rank": 9},
+        {"article": "Wikipedia:About", "views": 500000, "rank": 10}
+      ]
+    }
+  ]
+}
