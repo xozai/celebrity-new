@@ -69,7 +69,7 @@ Gaps against the written rules and problems worth fixing in the rewrite:
 | Hide the pile from other players | Row-level security plus SQL functions that return the slip only to the clue-giver | Needs Cloud Functions for every draw | No server-side logic |
 | Atomic "got it" (pop pile, score, maybe end round) | One SQL function with a row lock | Callable function with a transaction; cold starts on a tap that happens every few seconds | Client-side only |
 | Stable player identity | Anonymous sign-in | Anonymous sign-in | iCloud account required |
-| Live updates | Realtime on table changes | Firestore listeners | Push-based, slow for this |
+| Live updates | Private Realtime Broadcast | Firestore listeners | Push-based, slow for this |
 | Tests for the rules | pgTAP, runs locally and in CI | Emulator suite | None |
 | A future web or Android client | Yes | Yes | No |
 
@@ -84,7 +84,7 @@ To verify before committing: current Supabase free-tier limits. As I understand 
 2. Lobby: player list, host badge, host assigns two teams, custom team names.
 3. Host settings: slips per player (1-10, default 3), turn length (30/60/90 s), submission time limit.
 4. Private slip submission with retract-and-edit until the game starts.
-5. Submission countdown that auto-starts with the slips received.
+5. Submission countdown that auto-starts with the slips received. An empty window returns to the lobby.
 6. Three rounds with a rule banner: Say Anything, One Word, Charades.
 7. Clue-giver screen: big slip text, countdown, Got It.
 8. Guesser and opponent screens: who is up, countdown, slips left, live count for this turn.
@@ -109,7 +109,7 @@ To verify before committing: current Supabase free-tier limits. As I understand 
 21. Countdown corrected for clock differences between phone and server.
 22. Minimum of two players per team to start, with a warning when teams are uneven.
 23. Auto-balance and shuffle teams buttons for the host.
-24. Each team starts alternate rounds, and the clue-giver rotation continues across rounds.
+24. Teams alternate round starts when eligible, and the clue-giver rotation continues across rounds.
 25. Host can move a spectator onto a team between turns.
 26. Sounds: tick for the last ten seconds and a buzzer at zero, with a mute switch.
 27. Screen stays awake during a game.
@@ -162,8 +162,10 @@ supabase/
   config.toml
   migrations/0001_schema.sql, 0002_rls.sql, 0003_rooms.sql, 0004_lobby.sql,
     0005_submission.sql, 0006_turns.sql, 0007_rounds.sql, 0008_host.sql, 0009_cleanup.sql,
-    0010_celebrities.sql
+    0010_celebrities.sql, 0011_realtime.sql
   tests/*.test.sql                  pgTAP
+  tests/fixtures/snapshot.example.json
+  tests/concurrency/run.sh          two-session database checks
 tools/celebrity-list/               builds the recommendation list (Python 3, standard library only)
   build.py, sources_wikipedia.py, sources_imdb.py, merge.py, load.py
   tests/                            unit tests with small fixture files
@@ -183,58 +185,79 @@ docs/qa-plan.md
 
 Tables:
 
-- `rooms`: `id`, `code` (unique, 4 chars from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`), `host_id`, `phase` (`lobby`, `submitting`, `playing`, `round_end`, `finished`), `round` (0-3), `team_names text[2]`, `slips_per_player`, `turn_seconds`, `submission_seconds`, `skip_mode` (`off`, `one_per_turn`, `unlimited`), `submission_deadline`, `current_team`, `turn_idx int[2]`, `turn_player_id`, `turn_ends_at`, `turn_got`, `turn_skips`, `pile_count`, `scores jsonb`, `last_activity_at`, `created_at`.
-- `players`: primary key (`room_id`, `user_id`), `name`, `team`, `role` (`player`, `spectator`), `seat` (join order), `submitted`, `last_seen_at`. Unique on (`room_id`, `lower(name)`).
-- `slips`: `id`, `room_id`, `author_id`, `name`, `in_pile`, `pile_order` (random per round), `is_current`. No client can select from this table.
-- `turns`: `id`, `room_id`, `round`, `team`, `player_id`, `player_name`, `guessed text[]`, `skipped`, `ended_at`. This is the history.
+- `rooms`: `id uuid`, `code` (unique, 4 chars from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`), `host_id uuid` (nullable), `phase` (`lobby`, `submitting`, `playing`, `round_end`, `finished`), `round` (0-3), `team_names text[2]`, `slips_per_player`, `turn_seconds`, `submission_seconds`, `skip_mode` (`off`, `one_per_turn`, `unlimited`), `suggestions_enabled boolean` (default true), `submission_deadline`, `current_team`, `turn_idx int[2]`, `turn_player_id uuid`, `turn_ends_at`, `turn_got`, `turn_skips`, `pile_count`, `scores jsonb`, `last_activity_at`, `finished_at`, `created_at`. The deadline, current team, turn player, turn end and finish time are nullable. Scores are `[[r1_team0,r1_team1],[r2_team0,r2_team1],[r3_team0,r3_team1]]` and include scores from the active turn. There is no `created_by` column.
+- `players`: primary key (`room_id`, `user_id`), both UUIDs, plus `name`, `team` (0, 1 or null), `role` (`player`, `spectator`), `seat` (join order, starting at 1), `submitted`, `last_seen_at`. Unique on (`room_id`, `lower(name)`), (`room_id`, `seat`) and `user_id`.
+- `slips`: `id uuid`, `room_id`, `author_id uuid` (nullable), `name`, `in_pile`, `pile_order` (nullable, shuffled each round), `is_current`, `draw_token uuid` (present exactly while current), `guessed_at` (nullable), `skipped_in_turn`. No client can select from this table.
+- `turns`: `id bigint` (generated identity), `room_id`, `round`, `team`, `player_id uuid` (nullable), `player_name`, `guessed text[]`, `skipped int` (number of skip actions), `ended_at`. History includes guessed names. After data deletion, that player's turns have a null `player_id` and the name `Former player`.
+- `room_creations`: `user_id uuid`, `created_at timestamptz`. A private quota log that survives room deletion.
+- `celebrities`: the curated recommendation table (section 6a).
 
-`round_end` is a new phase (the reference server stays in `playing`); it is what makes the "start next round" guard possible.
+Row-level security: signed-in members with a live account can read their room, players and turns. Clients cannot write the tables directly or read slips, the quota log or the recommendation table. Anonymous sign-in uses the `authenticated` database role. The app RPCs below require that role and a live, non-deleted `auth.users` row. Room mutations lock the room and check membership under the lock where applicable. Membership changes by the same caller are serialised, and moves lock both rooms in UUID order.
 
-Row-level security: members of a room can select its `rooms`, `players` and `turns` rows. No client inserts, updates or deletes anywhere. Every change goes through a `security definer` function that checks `auth.uid()`.
+App RPCs in `public` (use the SQL argument names as JSON keys). Domain errors use SQLSTATE `P0001` with the code in the message. Every row can raise `not_authenticated` for a missing or deleted account. A call under the unsigned `anon` role has no execute grant (`42501`).
 
-Functions (each locks the room row with `select ... for update` first):
-
-| Function | Caller | Returns |
+| Function | Caller and result | Other domain errors |
 |---|---|---|
-| `create_room(name)` | anyone, max 5 per user per hour | snapshot |
-| `join_room(code, name)` | anyone; spectator if phase is not `lobby`; returns existing seat if `auth.uid()` is already a member | snapshot |
-| `leave_room()` | member | - |
-| `get_snapshot(room_id)` | member | room, players, turns, `server_now` |
-| `heartbeat(room_id)` | member | `server_now` |
-| `set_teams(assignments jsonb)`, `set_team_name(team, name)`, `update_settings(...)` | host, lobby only | - |
-| `start_game()` | host, needs 2+ players on each team | - |
-| `submit_slips(names text[])`, `retract_slips()` | player, `submitting` only | - |
-| `close_submissions()` | any member once the deadline has passed and 1+ slips exist | - |
-| `start_turn()` | the player whose turn it is | the slip |
-| `got_it()` | clue-giver, before `turn_ends_at` | next slip, or null if the pile is empty |
-| `skip_slip()` | clue-giver, subject to `skip_mode` | next slip |
-| `current_slip()` | clue-giver (used after a reconnect) | the slip |
-| `end_turn()` | any member once `turn_ends_at` has passed | - |
-| `start_next_round()` | host, `round_end` only | - |
-| `reset_room()` | host, `finished` only | - |
-| `assign_spectator(user_id, team)` | host, no turn active | - |
-| `transfer_host(user_id)`, `kick_player(user_id)` | host | - |
-| `claim_host()` | any member when the host's `last_seen_at` is older than 45 s | - |
-| `delete_my_data()` | anyone | - |
+| `create_room(p_name text)` | Signed-in user, up to five rooms per rolling hour. Returns snapshot JSON. | `invalid_name`, `rate_limited`, `code_unavailable` |
+| `join_room(p_code text, p_name text)` | Signed-in user. Returns snapshot JSON. Returns the existing seat for a caller already in the room. A new member outside the lobby is a spectator. | `room_not_found`, `invalid_name`, `name_taken` |
+| `leave_room()` | Member. Returns void. | `not_member` |
+| `get_snapshot(p_room_id uuid)` | Member. Returns snapshot JSON. | `not_member` |
+| `heartbeat(p_room_id uuid)` | Member. Updates presence and returns a single server timestamp (`timestamptz`). | `not_member` |
+| `set_teams(p_assignments jsonb)` | Host in lobby. Partial object mapping player UUID strings to 0, 1 or null. A team assignment promotes a spectator. Returns void. | `not_member`, `not_host`, `wrong_phase`, `invalid_team`, `player_not_found` |
+| `set_team_name(p_team int, p_name text)` | Host in lobby. Trims the name and takes its first 20 characters. Returns void. | `not_member`, `not_host`, `wrong_phase`, `invalid_team`, `invalid_name` |
+| `update_settings(p_settings jsonb)` | Host in lobby. Partial object with keys `slips_per_player`, `turn_seconds`, `submission_seconds`, `skip_mode`, `suggestions_enabled`. Returns void. | `not_member`, `not_host`, `wrong_phase`, `invalid_setting` |
+| `start_game()` | Host in lobby, with at least two players per team. Unassigned players become spectators. Sets the submission deadline and returns void. | `not_member`, `not_host`, `wrong_phase`, `not_enough_players` |
+| `submit_slips(p_names text[])` | Assigned player during the open submission window. Returns void. | `not_member`, `wrong_phase`, `submissions_closed`, `not_a_player`, `already_submitted`, `wrong_slip_count`, `invalid_slip` |
+| `retract_slips()` | Member during the open submission window. Removes only the caller's slips and returns void. | `not_member`, `wrong_phase`, `submissions_closed` |
+| `close_submissions()` | Member at or after the deadline. Starts with the slips received or returns the room to the lobby if the pile is empty. Returns void. | `not_member`, `wrong_phase` (lobby), `deadline_not_reached` |
+| `start_turn()` | Assigned clue-giver before their turn starts. Returns a draw JSON object or null. | `not_member`, `wrong_phase`, `not_your_turn`, `turn_already_started` |
+| `got_it(p_token uuid)` | Clue-giver during a running turn. Scores the current draw and returns the next draw, or null when the pile empties. | `not_member`, `wrong_phase`, `not_your_turn`, `turn_not_started`, `turn_over`, `invalid_token` |
+| `skip_slip(p_token uuid)` | Clue-giver during a running turn. Returns the draw JSON object or null. | `not_member`, `wrong_phase`, `not_your_turn`, `turn_not_started`, `turn_over`, `invalid_token`, `skip_not_allowed` |
+| `current_slip()` | Member. Returns the draw to the clue-giver during a running, unexpired turn, or null otherwise. | `not_member` |
+| `end_turn()` | Member at or after turn expiry. Returns void. No-op when there is no running turn. | `not_member`, `deadline_not_reached` |
+| `start_next_round()` | Host in `round_end`. Returns void. | `not_member`, `not_host`, `wrong_phase` |
+| `reset_room()` | Host in `finished`. Clears slips, scores, history and finish time, keeps the seats, teams and settings, and returns to the lobby. Returns void. | `not_member`, `not_host`, `wrong_phase` |
+| `assign_spectator(p_user_id uuid, p_team int)` | Host, with no running turn. Moves a spectator to team 0 or 1. Returns void. | `not_member`, `not_host`, `invalid_team`, `player_not_found`, `not_spectator`, `turn_active` |
+| `transfer_host(p_user_id uuid)`, `kick_player(p_user_id uuid)` | Host. Target must be another room member. Return void. | `not_member`, `not_host`, `cannot_target_self`, `player_not_found` |
+| `claim_host()` | Member when the host's presence is older than 45 s or the host seat is missing. Returns void. | `not_member`, `already_host`, `host_still_active` |
+| `delete_my_data()` | Signed-in user, including one without a room. Leaves the room and anonymises turn history. Deletes the caller's anonymous Auth account and quota rows. A non-anonymous account keeps its login and quota rows until the normal quota expiry. Returns void. | None |
+| `suggest_celebrities(q text, max int default 6)` | Signed-in user. Returns rows with `name text, description text, category text, sources text[]`. | None |
+| `random_celebrities(n int default 8, exclude text[] default '{}')` | Signed-in user. Returns the same row shape as suggestions. | None |
 
-Timer design: there is no server-side timer process. `turn_ends_at` is the source of truth. `got_it` and `skip_slip` reject calls after it. Every phone in the room calls `end_turn()` when its countdown hits zero; the first call wins and the rest are no-ops. The same pattern closes submissions. This drops the reference server's 30-second pause on clue-giver disconnect: the clock keeps running, and a clue-giver who reconnects gets the slip back through `current_slip()`.
+`cleanup_rooms()` is a service-role RPC that returns the number of rooms deleted as an integer. Every 10 minutes pg_cron runs it to remove rooms finished over an hour ago (using `finished_at`, with an activity-time fallback) or idle over 24 hours. It skips locked rooms and prunes quota entries older than an hour. `is_room_member(p_room_id uuid) → boolean` and `my_room_ids() → setof uuid` are policy helpers executable by `authenticated`. An invalid account or missing membership gives false or an empty set.
 
-Live updates: the app subscribes to changes on `rooms` (by id), `players` and `turns` (by room id), and refetches `get_snapshot` on every reconnect and return to foreground. Recap sheets are derived on the phone by comparing the previous and new snapshot (`RoomEventDeriver`), not from separate server events.
+Snapshot: `get_snapshot`, `create_room` and `join_room` return one JSON object with `room` (all room columns), `players` (rows ordered by `seat`), `turns` (rows ordered by numeric `id`) and `server_now`. Keys use the column names above. Empty collections are arrays. Slips and draw tokens are never included. Timestamps use ISO 8601 with a UTC offset and up to microsecond precision (see `supabase/tests/fixtures/snapshot.example.json`). Decode with `RoomSnapshot.makeDecoder()` and use its date strategy for standalone timestamps such as `heartbeat`. Swift groups the flat room settings in `Room.settings` and uses `Int64` for turn IDs.
 
-Kicked detection: a deleted `players` row whose key matches the local user id.
+Membership: each user has one seat across all rooms. Creating or joining another room takes the caller out of their previous room. Leaving or being kicked closes an active turn belonging to that clue-giver, with scores and history retained. Removal during submission deletes that player's slips. Outside submission it detaches their authorship and keeps the pile intact. If the host leaves, the lowest remaining seat becomes host. The last member's departure deletes the room and its rows, so the code can no longer be joined.
 
-Cleanup: a pg_cron job deletes finished rooms older than 1 hour and any room idle for 24 hours.
+Submission: the last eligible submission starts round 1 immediately. Submit and retract are closed at `submission_deadline`. At zero, any member can call `close_submissions()`. An expired window with no slips clears the deadline and submitted flags, and returns the room to the lobby. A duplicate close after play starts is a no-op. A duplicate after the empty-window reset can return `wrong_phase`. The deadline can remain populated after play starts. Use it only while submitting.
+
+Turns: the round starter alternates by team and the rotation carries across rounds in seat order. A team with fewer than two players is skipped when assigning a turn. Use `nextUp` for the server assignment and `turn_ends_at` to tell whether that turn is running. If neither team can play, the room stays in `playing` with a null `turn_player_id` and `nextUp` is nil. The host can assign a spectator between turns. Scoring happens on Got It, the completed turn is written to history, and an empty pile ends the round or finishes the game after round 3.
+
+Draws: the clue-giver alone receives `{"id": "<slip UUID>", "name": "<slip name>", "token": "<draw UUID>"}`. Every draw has a new token, even when skipping the last slip redraws the same slip. Both actions require the displayed draw's `p_token` with no default. After checking turn ownership and expiry, they reject null with `invalid_token`. A stale token changes nothing and returns the current draw before applying any skip limit. Skipping puts the slip at the back of the pile. Turn end returns the unfinished slip to the pile. The timer keeps running on disconnect, and `current_slip()` retrieves the current draw on reconnect. The turn expires at `turn_ends_at`. Every phone can call `end_turn()` at zero.
+
+Live updates: call Realtime `setAuth` with the session token, then join private Broadcast on `room:<room_id>` using a lowercase UUID. Every event is an invalidation. Coalesce bursts and refetch `get_snapshot` on any event, reconnect and return to foreground. Recaps are derived from snapshots by `RoomEventDeriver`.
+
+| Event | Sent when |
+|---|---|
+| `room_changed` | The room row is updated. |
+| `room_deleted` | The room is deleted. One event covers the room and its cascading seat deletions. |
+| `players_changed` | A player joins, leaves or is removed while the room remains, or their name, team, role, seat or submitted status changes. |
+| `turns_changed` | A turn row is inserted or updated. |
+
+Each payload contains only `room_id` plus Realtime's own message `id`. Heartbeats do not broadcast. Clients cannot publish on the channel. Joining requires membership and a live account. A previously authorised socket can still see invalidation timing until it reauthorises. For the currently joined room, `get_snapshot` returning `not_member` means the seat is gone. Treat it as kicked unless a known deletion or intentional leave explains it. Broadcast send failures are logged without rolling back the game write, so reconnect and foreground refetches still matter.
 
 ### 6a. Celebrity recommendations
 
 Two layers feed the Submit screen.
 
-**Layer 1: a curated list in Supabase (Wikipedia + IMDb).** A `celebrities` table of roughly 5,000 well-known names, rebuilt monthly by a script and queried through two functions. This is what makes recommendations fast, ranked by fame, and limited to actual people and characters.
+**Layer 1: a curated list in Supabase (Wikipedia + IMDb).** A `celebrities` table designed for roughly 5,000 well-known names, built by a script with a monthly refresh workflow and queried through two functions. This is what makes recommendations fast, ranked by fame, and limited to actual people and characters.
 
-- Table `celebrities`: `id`, `name`, `name_norm` (lowercased, accents stripped, unique), `description`, `category` (`film_tv`, `music`, `sports`, `public_figure`, `fictional`, `other`), `popularity` (0-1), `sources text[]` (`wikipedia`, `imdb`). No direct client access. A pg_trgm index on `name_norm`.
-- `suggest_celebrities(q text, max int default 6)`: matches the start of the name or the start of any word in it ("jobs" finds Steve Jobs), ordered by popularity. Requires 2+ characters; `max` is clamped to 10.
-- `random_celebrities(n int default 8, exclude text[])`: a popularity-weighted random sample for the "Need ideas?" row, skipping names the player has already typed. `n` is clamped to 20.
-- `rooms.suggestions_enabled boolean default true`, set through `update_settings`.
+- Table `celebrities`: `id bigint` (generated identity), `name text` (1-100 chars), `name_norm text` (unique), `description text`, `category` (`film_tv`, `music`, `sports`, `public_figure`, `fictional`, `other`), `popularity double precision` (0-1), `sources text[]` (`wikipedia`, `imdb`). No direct client access. A GIN pg_trgm index on `name_norm`.
+- Normalisation order: unaccent or transliterate, lowercase, collapse whitespace to single spaces, then trim. Keep punctuation apart from transliteration mappings. SQL uses PostgreSQL unaccent and the offline builder uses Unicode decomposition and a Latin mapping table. Full Unicode and locale parity is unverified.
+- `suggest_celebrities(q text, max int default 6)`: matches the start of the name or the start of any word in it ("jobs" finds Steve Jobs), ordered by descending popularity, then name. Requires 2+ normalised characters. Clamp `max` to 1-10, default 6.
+- `random_celebrities(n int default 8, exclude text[] default '{}')`: a popularity-weighted random sample without replacement for the "Need ideas?" row. Compare excluded names after normalisation. Clamp `n` to 1-20, default 8.
+- `rooms.suggestions_enabled boolean default true`, set by the host in the lobby through `update_settings`. The app uses this flag to decide whether to request or show recommendations.
 
 How the list is built (`tools/celebrity-list/build.py`):
 
@@ -253,6 +276,8 @@ Attribution: the app settings screen and the privacy page credit both sources. I
 Each task ends with a commit using Conventional Commits (the reference repos use release-please). Tests are written first in every task that has them.
 
 ### Phase 0: Bootstrap
+
+Done.
 
 **Task 0.1: Create the repo and tooling**
 - Run: `gh repo create xozai/celebrity-new --public --clone`.
@@ -274,7 +299,9 @@ Each task ends with a commit using Conventional Commits (the reference repos use
 
 ### Phase 1: Database and rules
 
-One migration and one pgTAP file per task. Verify each with `supabase db reset && supabase test db`.
+Done.
+
+Verify with `supabase db reset && supabase test db`. Private Broadcast is in `0011_realtime.sql` and is covered by `011_realtime.test.sql`.
 
 **Task 1.1: Schema** - `0001_schema.sql`, `001_schema.test.sql` (tables, checks, unique indexes exist).
 
@@ -284,9 +311,9 @@ One migration and one pgTAP file per task. Verify each with `supabase db reset &
 
 **Task 1.4: Lobby** - `set_teams`, `set_team_name`, `update_settings`, `start_game`. Tests: non-host rejected, out-of-range values rejected, team name trimmed to 20 chars, start needs 2+ per team, start sets `submitting` and the deadline.
 
-**Task 1.5: Submission** - `submit_slips`, `retract_slips`, `close_submissions`. Tests: wrong count rejected, spectator rejected, retract removes only that player's slips, last submission starts round 1 with `pile_count` equal to total slips, close before the deadline rejected, close with zero slips rejected, close after the deadline starts with partial slips.
+**Task 1.5: Submission** - `submit_slips`, `retract_slips`, `close_submissions`. Tests: wrong count rejected, spectator rejected, retract removes only that player's slips, last submission starts round 1 with `pile_count` equal to total slips, close before the deadline rejected, close with zero slips returns to the lobby, close after the deadline starts with partial slips.
 
-**Task 1.6: Turns** - `start_turn`, `got_it`, `skip_slip`, `current_slip`, `end_turn`. Tests: only the current player can start; got it increments the count and returns a different slip; skip rejected when `skip_mode` is `off`; second skip rejected under `one_per_turn`; skipped slip stays in the pile; `end_turn` before the deadline rejected; after the deadline the current slip returns to the pile, a `turns` row is written, the score is added, and the turn passes to the other team's next player; a second `end_turn` is a no-op; `got_it` after the deadline rejected; non-clue-giver calling `current_slip` gets nothing.
+**Task 1.6: Turns** - `start_turn`, `got_it`, `skip_slip`, `current_slip`, `end_turn`. Tests: only the current player can start; got it increments the count and returns a different slip; skip rejected when `skip_mode` is `off`; second skip rejected under `one_per_turn`; skipped slip stays in the pile; `end_turn` before the deadline rejected; at expiry the current slip returns to the pile, a `turns` row is written, and play passes to the next eligible clue-giver. Got It adds the score immediately; a second `end_turn` is a no-op; `got_it` after the deadline rejected; non-clue-giver calling `current_slip` gets nothing.
 
 **Task 1.7: Rounds and game end** - emptying the pile sets `round_end` (or `finished` after round 3); `start_next_round`; `reset_room`. Tests: `start_next_round` rejected during `playing`; pile refilled with every slip; rotation continues; total score per round equals the slip count; winner and tie cases; reset clears slips, scores and history and keeps players and teams.
 
@@ -297,6 +324,8 @@ One migration and one pgTAP file per task. Verify each with `supabase db reset &
 **Task 1.10: Celebrity table and functions** - `0010_celebrities.sql`, `010_celebrities.test.sql`, seeded in the test with about 20 rows. Tests: no direct select; prefix match; word-start match; case and accent insensitive ("beyonce" finds Beyoncé); ordered by popularity; one-character query returns nothing; `max` and `n` clamped; `random_celebrities` honours `exclude` and returns no repeats; `suggestions_enabled` toggles through `update_settings` for the host only.
 
 ### Phase 1b: Recommendation list
+
+Done. Live verification is carried forward below.
 
 Verify script tasks with `python3 -m unittest discover tools/celebrity-list/tests`.
 
@@ -312,9 +341,11 @@ Verify script tasks with `python3 -m unittest discover tools/celebrity-list/test
 
 ### Phase 2: CelebrityCore
 
+Done.
+
 Verify each with `swift test --package-path Packages/CelebrityCore`.
 
-**Task 2.1: Models** - `Room`, `Player`, `Turn`, `Settings`, `RoomSnapshot` as `Codable`, `Sendable`, `Equatable` with snake_case keys. Test: decode a JSON fixture captured from `get_snapshot`.
+**Task 2.1: Models** - `Room`, `Player`, `Turn`, `Settings`, `RoomSnapshot` as `Codable`, `Sendable`, `Equatable` with snake_case keys. Tests: decode the captured and hand-written fixtures and round-trip through the snapshot wire encoder and decoder.
 
 **Task 2.2: Derived values** - on `RoomSnapshot`: `me`, `isHost`, `isClueGiver`, `isSpectator`, `teamTotals`, `winner`, `canStartGame` with a reason string, `nextUp`. Table-driven tests.
 
@@ -324,19 +355,29 @@ Verify each with `swift test --package-path Packages/CelebrityCore`.
 
 **Task 2.5: Validation and rules text** - name trimming and length limits, room code normalisation, join-link parsing (`https://celeb.xozai.com/join/CODE`), the three round descriptions. Include a test that two identical names in one submission are both kept.
 
+**Carried forward**
+
+- Task 1b.4's live build, load and spot check have yet to run.
+- Replace the `TEAMID` and `APP_STORE_URL` placeholders in `site/` before release. Verify the IMDb credit wording.
+- On a hosted staging project, apply the migrations and test private Broadcast end to end. A member should receive all four events, and an outsider and a removed player attempting a new join should receive none.
+- Confirm that the hosted Realtime join authorisation probe passes with the policy's `topic = realtime.topic()` binding.
+- Confirm the hosted `realtime.send(jsonb, text, text, boolean)` signature. The wrapper tolerates a missing signature, which leaves the app without delivery.
+- Check query plans for `rooms`, `players` and `turns` under the hosted REST role with realistic history sizes. Confirm that the migration owner's definer functions can read `auth.users`.
+- Put every database change from here on in a new forward migration. Use `supabase/tests/concurrency/run.sh` for the two-session checks.
+
 ### Phase 3: CelebrityBackend
 
-**Task 3.1: Protocol** - `GameBackend` with one async method per server function, plus `func updates(roomID:) -> AsyncStream<RoomSnapshot>` and `var connection: AsyncStream<ConnectionState>`. `BackendError` maps server error codes to user-facing messages.
+**Task 3.1: Protocol** - `GameBackend` with one async method per app RPC, including token arguments for Got It and Skip and a private draw result carrying `id`, `name` and `token`, plus `func updates(roomID:) -> AsyncStream<RoomSnapshot>` and `var connection: AsyncStream<ConnectionState>`. `BackendError` maps the domain codes in section 6 to user-facing messages. Provide a way for the app to observe a terminal `not_member` result from a refresh even though the snapshot stream carries only successful snapshots.
 
 **Task 3.2: Fake** - `FakeGameBackend`, scriptable, for previews and UI tests. It replays canned snapshots and does not reimplement the rules.
 
-**Task 3.3: Supabase implementation, calls** - anonymous sign-in on first launch (session stored in the Keychain by the SDK), then one RPC wrapper per function.
+**Task 3.3: Supabase implementation, calls** - anonymous sign-in on first launch (session stored in the Keychain by the SDK), then one RPC wrapper per app function using the argument keys in section 6. Decode snapshots with `RoomSnapshot.makeDecoder()`. Decode the nullable draw objects separately and `heartbeat` as a timestamp scalar.
 
-**Task 3.4: Supabase implementation, live updates** - subscribe to the three tables, coalesce bursts, refetch the snapshot on each change and on reconnect.
+**Task 3.4: Supabase implementation, live updates** - call Realtime `setAuth` before joining the private `room:<room_id>` Broadcast channel. Listen to all four events in section 6, coalesce bursts and refetch `get_snapshot` on any event, reconnect and foregrounding. Cancel the old subscription on room or session changes. Surface `not_member` as removal for the current room and close its channel.
 
-**Task 3.4b: Recommendation calls** - add `suggestCelebrities(query:)` and `randomCelebrities(count:excluding:)` to `GameBackend`, returning `[CelebritySuggestion]` (name, description, source), with Supabase and fake implementations.
+**Task 3.4b: Recommendation calls** - add `suggestCelebrities(query:)` and `randomCelebrities(count:excluding:)` to `GameBackend`, returning `[CelebritySuggestion]` (name, description, category, sources), with Supabase and fake implementations.
 
-**Task 3.5: Integration tests** - port the 45 cases from the reference `test/integration.js` to Swift Testing, driving four signed-in clients against local Supabase. Verify: `supabase start && swift test --package-path Packages/CelebrityBackend`.
+**Task 3.5: Integration tests** - port the 45 cases from the reference `test/integration.js` to Swift Testing, driving four signed-in clients against local Supabase. Exercise stale draw tokens, clue-giver-only draw access, and removal detected by snapshot refresh. Verify: `supabase start && swift test --package-path Packages/CelebrityBackend`.
 
 ### Phase 4: App screens
 
@@ -348,7 +389,7 @@ Every view gets previews built on `FakeGameBackend`. Verify each task by buildin
 
 **Task 4.3: Lobby** - player list, team editor (tap to move, shuffle, auto-balance), team names, host settings sheet including skip mode, invite sheet (code, QR, share), start button with the disabled reason. Previews: host, guest, uneven teams.
 
-**Task 4.4: Submit** - one field per slip, countdown, submitted-count progress, retract. Previews: editing, waiting, spectator.
+**Task 4.4: Submit** - one field per slip, countdown, submitted-count progress, retract. Disable edits at the deadline. Route an empty expired window back to Lobby from the refetched snapshot. Previews: editing, waiting, spectator.
 
 **Task 4.4b: Wikipedia live search** - `WikipediaSearch.swift`: build the request, decode, drop disambiguation pages. Unit tests with a stubbed `URLProtocol`: normal response, empty response, timeout, malformed JSON.
 
@@ -356,25 +397,25 @@ Every view gets previews built on `FakeGameBackend`. Verify each task by buildin
 
 **Task 4.4d: Suggestion list and ideas row** - `SlipField.swift` shows up to 6 suggestions with descriptions under the focused field; `IdeasRow.swift` shows 8 chips and a shuffle button, fills the next empty slip on tap, and excludes names already entered. Both are hidden when the host has turned recommendations off. Add the toggle to the host settings sheet from Task 4.3. Previews: suggestions showing, ideas row, recommendations off. VoiceOver reads name then description.
 
-**Task 4.5: Game, clue-giver** - Start Turn, slip card, Got It, Skip (hidden, limited or free per setting), timer ring. Previews for each skip mode.
+**Task 4.5: Game, clue-giver** - Start Turn, slip card, Got It, Skip (hidden, limited or free per setting), timer ring. Send the displayed draw token with Got It and Skip, and replace the displayed draw with the RPC result, including its token. A stale-token reply resynchronises the displayed draw. Clear it when the turn ends, the player loses the clue-giver role, or the room changes. Keep the draw out of shared snapshots and recap state. Previews for each skip mode.
 
-**Task 4.6: Game, watcher** - who is giving clues, "your team is guessing" or "stay quiet", timer, slips left, live count, round rule banner, scoreboard. Previews: guesser, opponent, spectator.
+**Task 4.6: Game, watcher** - who is giving clues, "your team is guessing" or "stay quiet", timer, slips left, live count, round rule banner, scoreboard. During `playing`, a nil `nextUp` means there is no assigned clue-giver. Show the host an "assign a spectator" state with the team assignment action, and tell other players they are waiting for the host. Previews: guesser, opponent, spectator, stalled room.
 
-**Task 4.7: Recap sheets** - round intro, turn recap, round end with host-only Next Round, game end with winner or tie, history, share, Play Again for the host.
+**Task 4.7: Recap sheets** - round intro, turn recap, round end with host-only Next Round, game end with winner or tie, history, share, Play Again for the host. Show skip counts and use the saved display name for anonymised turns.
 
-**Task 4.8: How to Play and app settings** - rules text based on the Coyier write-up, theme, sound toggle, delete my data, privacy policy link, version.
+**Task 4.8: How to Play and app settings** - rules text based on the Coyier write-up, theme, sound toggle, delete my data, privacy policy link, version. After a successful data deletion, clear the stored room and local game state. Clear the local anonymous session when its account was deleted. A retained account keeps its login.
 
 ### Phase 5: Resilience
 
 **Task 5.1: Server clock** - `ServerClock` stores the offset from `server_now`; the timer renders from `turn_ends_at` minus corrected now. Unit test with a 90-second skew.
 
-**Task 5.2: Deadline calls** - when the countdown hits zero call `end_turn()` (or `close_submissions()`), ignoring "already ended" errors.
+**Task 5.2: Deadline calls** - when the countdown hits zero call `end_turn()` (or `close_submissions()`), and refetch. The server uses its own clock at the deadline. Treat a close that returns `wrong_phase` after an empty window returned to the lobby as benign. If the server says `deadline_not_reached`, refresh the clock and wait for the deadline.
 
-**Task 5.3: Lifecycle** - on `scenePhase == .active`, reconnect and refetch; the clue-giver also calls `current_slip()`. Persist the room id for auto-rejoin after relaunch. Non-blocking reconnecting banner.
+**Task 5.3: Lifecycle** - on `scenePhase == .active`, refresh Realtime auth, reconnect the private Broadcast channel and refetch. The active clue-giver calls `current_slip()` to restore both the slip and its current draw token. Persist the room id for auto-rejoin after relaunch. Non-blocking reconnecting banner.
 
 **Task 5.4: Presence and host handoff** - `heartbeat` every 15 s; grey out players stale for 30 s; the lowest-seat connected player calls `claim_host()` when the host is stale for 45 s.
 
-**Task 5.5: Kicked and room-gone handling** - alert, then return to Home and clear the stored room.
+**Task 5.5: Kicked and room-gone handling** - after a Broadcast or lifecycle refresh, treat `get_snapshot` returning `not_member` for the joined room as loss of the seat. Use a known `room_deleted` event to distinguish a closed room where possible. Alert, cancel the subscription, return to Home and clear the stored room and draw.
 
 ### Phase 6: Polish
 
@@ -409,7 +450,7 @@ Do this only after the new app is approved and live.
 
 ## 8. Risks and tradeoffs
 
-- **Realtime lag or missed messages.** Mitigated by refetching the snapshot on every change and reconnect, and by having every phone call `end_turn()` at zero.
+- **Realtime lag or missed messages.** Refetch the snapshot on any private Broadcast event, reconnect and foregrounding. Every phone calls `end_turn()` at zero. An already authorised socket can still see invalidation timing after removal until it reauthorises.
 - **Rules live in SQL.** Harder to debug than Swift or JavaScript. Mitigated by pgTAP coverage per function and the ported integration suite.
 - **No turn pause on disconnect.** A clue-giver who drops loses that time. Simpler and matches a real table; revisit if testers complain.
 - **Player-typed names are user-generated content.** Rooms are private and code-gated, and the host can kick, but App Review sometimes asks for reporting or filtering. Have a short answer ready in the review notes; add a report link if they push back.
@@ -448,9 +489,10 @@ Each worker gets its own git worktree (`herdr worktree create --cwd "$REPO" --br
 |---|---|---|---|
 | 1. Serial | Phase 0 on main | waits | waits |
 | 2. Parallel | Phase 1, `supabase/` | Phase 2, `Packages/CelebrityCore` | Phase 1b, `tools/celebrity-list`, then static files in `site/` |
-| 3. Parallel | Tasks 3.1 and 3.2 first, then the rest of Phase 3 | Phase 4 screens, once 3.1 and 3.2 are merged | Task 4.4b, `docs/qa-plan.md` |
+| 3. Parallel | Tasks 3.1 and 3.2 first, then the rest of Phase 3 | Phase 4 screens, once 3.1 and 3.2 are merged | Quota exhausted until about 29 November 2026 |
 | 4. Parallel | Phase 5 | Phase 6 | cross-reviews |
 
+- Assign Antigravity's stage 3 lane (Task 4.4b and `docs/qa-plan.md`) to Codex or Claude.
 - Claude owns all database work, because only one local Supabase stack can run at a time.
 - Codex runs with `-s workspace-write` and does not commit; the lead commits its lane after review.
 - Phases 7.3, 8 and 9 stay with the user (real devices, App Store Connect, Render).
@@ -468,6 +510,7 @@ Each worker gets its own git worktree (`herdr worktree create --cwd "$REPO" --br
 
 - Herdr shows the lead as idle even while it works, so the sidebar and `agent wait` cannot tell when the lead is done. Read the lead's pane, or have it print a sentinel line.
 - Antigravity reads idle while background tasks run. The status file is the completion signal.
+- Claude asks before reading files outside its worktree. Codex asks before running `swift test`.
 - Workers stop on approval prompts. Skip-approval flags stay off while the Supabase service key is on the machine.
 
 ## 10. Open questions
