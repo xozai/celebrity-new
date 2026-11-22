@@ -1,0 +1,19 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "TEAMID.com.xozai.CelebrityGame",
+        "paths": [
+          "/join/*"
+        ],
+        "components": [
+          {
+            "/": "/join/*",
+            "comment": "Matches invite links to join a room"
+          }
+        ]
+      }
+    ]
+  }
+}

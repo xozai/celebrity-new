@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy — Celebrity Celebrity</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #f59e0b;
+      --border: #334155;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      padding: 0 1.5rem;
+    }
+    .container {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 4rem 0 3rem;
+    }
+    header {
+      margin-bottom: 2.5rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.5rem;
+    }
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      margin-bottom: 0.5rem;
+    }
+    .updated {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+    h2 {
+      font-size: 1.4rem;
+      margin: 2rem 0 1rem;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.35rem;
+    }
+    p, ul {
+      margin-bottom: 1.25rem;
+      color: #cbd5e1;
+    }
+    ul {
+      padding-left: 1.5rem;
+    }
+    li {
+      margin-bottom: 0.5rem;
+    }
+    a {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+    a:hover {
+      color: #fbbf24;
+    }
+    .credit-box {
+      background-color: var(--card-bg);
+      border-left: 4px solid var(--accent);
+      padding: 1rem 1.25rem;
+      border-radius: 0 0.5rem 0.5rem 0;
+      margin: 1.5rem 0;
+    }
+    footer {
+      margin-top: 3.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Privacy Policy</h1>
+      <p class="updated">Last updated: November 2026</p>
+    </header>
+
+    <p>
+      <strong>Celebrity Celebrity</strong> is a free, privacy-focused iOS party game developed by <strong>xozai</strong>. We believe party games should be fun, simple, and respect your privacy. The app requires no user account, collects no personal information, and includes no advertising or tracking SDKs.
+    </p>
+
+    <h2>1. Information We Do Not Collect</h2>
+    <p>
+      We do not collect or store:
+    </p>
+    <ul>
+      <li>Your name, email address, phone number, or physical location.</li>
+      <li>Device identifiers used for advertising or cross-app tracking (IDFA).</li>
+      <li>Contacts, camera photos, or personal files.</li>
+      <li>Payment or financial details (the app is completely free).</li>
+    </ul>
+
+    <h2>2. How the Game Operates (Anonymous Authentication)</h2>
+    <p>
+      To enable real-time multiplayer games across devices, the app connects to <strong>Supabase</strong> using anonymous authentication.
+    </p>
+    <ul>
+      <li><strong>Anonymous Identifier:</strong> On launch, an anonymous cryptographic user ID is created solely to distinguish players within a room, assign teams, and rotate clue-givers. This identifier is never linked to any personal identity.</li>
+      <li><strong>Room Codes & Player Display Names:</strong> When you enter a room, the nickname you choose and the 4-character room code are stored temporarily in the database to coordinate the game for all players in that room.</li>
+      <li><strong>Game Slips:</strong> The celebrity names and slips submitted by players are stored temporarily in the database for the duration of the game.</li>
+    </ul>
+
+    <h2>3. Data Retention and Automatic Deletion</h2>
+    <p>
+      All game session data is strictly temporary:
+    </p>
+    <ul>
+      <li>Finished games are automatically and permanently deleted within 1 hour of game completion.</li>
+      <li>Any room idle for 24 hours is automatically purged.</li>
+      <li><strong>Delete My Data:</strong> Players can delete their active session and data at any time directly in the app by selecting "Delete my data" in App Settings.</li>
+    </ul>
+
+    <h2>4. Third-Party Data and Attributions</h2>
+    <p>
+      To help players discover names during slip submission, the app provides celebrity recommendations sourced from public databases:
+    </p>
+    <ul>
+      <li>
+        <strong>Wikipedia &amp; Wikidata:</strong> Popular figures and descriptions are provided via Wikimedia APIs under the
+        <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">Creative Commons Attribution-ShareAlike License</a>.
+      </li>
+      <li>
+        <div class="credit-box">
+          <strong>IMDb:</strong> Information courtesy of IMDb (<a href="https://www.imdb.com" target="_blank" rel="noopener">https://www.imdb.com</a>). Used with permission.
+        </div>
+      </li>
+    </ul>
+
+    <h2>5. Security</h2>
+    <p>
+      All network communication between your device and the Supabase backend is encrypted using Transport Layer Security (TLS/HTTPS). Row-level security policies ensure only players in an active room can read game status, and slips remain hidden from guessers until drawn.
+    </p>
+
+    <h2>6. Contact</h2>
+    <p>
+      If you have questions about this privacy policy, please open an issue or reach out via our GitHub repository at
+      <a href="https://github.com/xozai/celebrity-new" target="_blank" rel="noopener">xozai/celebrity-new</a>.
+    </p>
+
+    <footer>
+      <p>&copy; xozai &bull; <a href="/">Celebrity Celebrity Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>
