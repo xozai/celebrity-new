@@ -92,15 +92,30 @@ private func allSnapshots() -> [(SampleScenario.ID, RoomSnapshot)] {
         #expect(after.players.map(\.userID) == s.snapshot.players.map(\.userID))
     }
 
-    @Test func clueGiverBeforeStartTurnThenRunning() throws {
+    @Test func clueGiverBeforeStartTurnThenStarted() throws {
         let s = scenario(.playingClueGiverReady)
         #expect(s.snapshot.isClueGiver(userID: s.userID))
         #expect(s.snapshot.room.turnEndsAt == nil)
         #expect(s.draw == nil)
-        let running = try #require(s.followUp)
-        #expect((running.room.turnEndsAt ?? .distantPast) > now)
-        #expect(running.room.turnPlayerID == s.snapshot.room.turnPlayerID)
-        #expect(running.room.turnGot > s.snapshot.room.turnGot)
+        let started = try #require(s.followUp)
+        #expect((started.room.turnEndsAt ?? .distantPast) > now)
+        #expect(started.room.turnPlayerID == s.snapshot.room.turnPlayerID)
+        // start_turn resets counters and starts the timer; it scores nothing and draws from the pile.
+        #expect(started.room.turnGot == 0 && started.room.pileCount == s.snapshot.room.pileCount)
+        #expect(s.followUpDraw != nil)
+    }
+
+    @Test func finishedRoomTimestampsFollowTheServerOrder() {
+        for id in [SampleScenario.ID.finishedWinner, .finishedTie] {
+            let r = scenario(id).snapshot
+            let last = r.turns.last!.endedAt
+            let finished = r.room.finishedAt!
+            // The turn is written first, then finished_at: successive clock_timestamp() calls.
+            #expect(finished > last, "\(id)")
+        }
+        // Frankie's removal after the game bumps last_activity_at past finished_at.
+        let winner = scenario(.finishedWinner).snapshot.room
+        #expect(winner.lastActivityAt > winner.finishedAt!)
     }
 
     @Test(arguments: runningClueGiverIDs)

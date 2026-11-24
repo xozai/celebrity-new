@@ -82,9 +82,11 @@ public struct SampleScenario: Sendable, Equatable, Identifiable {
         /// the server returns to after `close_submissions()`.
         case submittingExpiredEmpty
         /// Round 1: Blair is the assigned clue-giver but has not started the turn (`turn_ends_at` is nil). Viewed by
-        /// Blair. ``SampleScenario/followUp`` is the running snapshot after `start_turn()`.
+        /// Blair. ``SampleScenario/followUp`` is the snapshot after `start_turn()`: the timer runs for the full turn
+        /// length and nothing is scored; ``SampleScenario/followUpDraw`` is the first draw.
         case playingClueGiverReady
-        /// Round 1, a turn running, viewed by the clue-giver (Blair). Skip mode one per turn, none used yet. Has a draw.
+        /// Round 1, a turn well under way (two names scored, 38 seconds left), viewed by the clue-giver (Blair). Skip mode
+        /// one per turn, none used yet. Has a draw.
         case playingClueGiver
         /// As ``playingClueGiver`` with skipping off.
         case playingClueGiverSkipOff
@@ -128,6 +130,9 @@ public struct SampleScenario: Sendable, Equatable, Identifiable {
     /// window closes, the clue-giver starts the turn), or nil if the scenario has none. Script it with
     /// ``FakeGameBackend/script(_:snapshots:)`` to replay the transition.
     public var followUp: RoomSnapshot?
+    /// The private draw that belongs with ``followUp`` (for Start Turn: the first draw), or nil. Script both together with
+    /// ``FakeGameBackend/script(_:followUpOf:)``.
+    public var followUpDraw: Draw?
 
     /// Creates a scenario from parts.
     /// - Parameters:
@@ -137,13 +142,18 @@ public struct SampleScenario: Sendable, Equatable, Identifiable {
     ///   - snapshot: The room.
     ///   - draw: The viewer's private draw, if any.
     ///   - followUp: The snapshot after the natural next step, if any.
-    public init(id: ID, title: String, userID: UUID, snapshot: RoomSnapshot, draw: Draw? = nil, followUp: RoomSnapshot? = nil) {
+    ///   - followUpDraw: The private draw that goes with the follow-up, if any.
+    public init(
+        id: ID, title: String, userID: UUID, snapshot: RoomSnapshot, draw: Draw? = nil,
+        followUp: RoomSnapshot? = nil, followUpDraw: Draw? = nil
+    ) {
         self.id = id
         self.title = title
         self.userID = userID
         self.snapshot = snapshot
         self.draw = draw
         self.followUp = followUp
+        self.followUpDraw = followUpDraw
     }
 
     /// The same room seen by another user. The draw is dropped, since only the clue-giver has one. The follow-up is kept.
@@ -210,19 +220,19 @@ private struct SampleBuilder {
         case .submittingExpiredEmpty:
             make(id, "Submitting, window expired empty", .alex, submittingExpiredEmpty(), followUp: lobbyAfterEmptyWindow())
         case .playingClueGiverReady:
-            make(id, "Playing, ready to start (clue-giver)", .blair, playing(skip: .onePerTurn, running: false),
-                 draw: nil, followUp: playing(skip: .onePerTurn, running: true))
+            make(id, "Playing, ready to start (clue-giver)", .blair, playing(skip: .onePerTurn, phase: .ready),
+                 followUp: playing(skip: .onePerTurn, phase: .justStarted), followUpDraw: Self.blairDraw)
         case .playingClueGiver:
-            make(id, "Playing (clue-giver)", .blair, playing(skip: .onePerTurn, running: true), draw: Self.blairDraw)
+            make(id, "Playing (clue-giver)", .blair, playing(skip: .onePerTurn, phase: .underway), draw: Self.blairDraw)
         case .playingClueGiverSkipOff:
-            make(id, "Playing, skipping off (clue-giver)", .blair, playing(skip: .off, running: true), draw: Self.blairDraw)
+            make(id, "Playing, skipping off (clue-giver)", .blair, playing(skip: .off, phase: .underway), draw: Self.blairDraw)
         case .playingClueGiverSkipUsed:
-            make(id, "Playing, skip used (clue-giver)", .blair, playing(skip: .onePerTurn, running: true, turnSkips: 1), draw: Self.blairDraw)
+            make(id, "Playing, skip used (clue-giver)", .blair, playing(skip: .onePerTurn, phase: .underway, turnSkips: 1), draw: Self.blairDraw)
         case .playingClueGiverUnlimited:
-            make(id, "Playing, unlimited skips (clue-giver)", .blair, playing(skip: .unlimited, running: true, turnSkips: 3), draw: Self.blairDraw)
-        case .playingGuesser: make(id, "Playing (guesser)", .casey, playing(skip: .onePerTurn, running: true))
-        case .playingOpponent: make(id, "Playing (opponent)", .drew, playing(skip: .onePerTurn, running: true))
-        case .playingSpectator: make(id, "Playing (spectator)", .gray, playing(skip: .onePerTurn, running: true))
+            make(id, "Playing, unlimited skips (clue-giver)", .blair, playing(skip: .unlimited, phase: .underway, turnSkips: 3), draw: Self.blairDraw)
+        case .playingGuesser: make(id, "Playing (guesser)", .casey, playing(skip: .onePerTurn, phase: .underway))
+        case .playingOpponent: make(id, "Playing (opponent)", .drew, playing(skip: .onePerTurn, phase: .underway))
+        case .playingSpectator: make(id, "Playing (spectator)", .gray, playing(skip: .onePerTurn, phase: .underway))
         case .stalledHost: make(id, "Stalled, no clue-giver (host)", .alex, stalled(), followUp: stalledAfterAssignment())
         case .stalledGuest: make(id, "Stalled, no clue-giver (guest)", .blair, stalled(), followUp: stalledAfterAssignment())
         case .roundEndHost: make(id, "Round end (host)", .alex, roundEnd())
@@ -236,9 +246,9 @@ private struct SampleBuilder {
 
     private func make(
         _ id: SampleScenario.ID, _ title: String, _ viewer: SampleCast, _ snapshot: RoomSnapshot,
-        draw: Draw? = nil, followUp: RoomSnapshot? = nil
+        draw: Draw? = nil, followUp: RoomSnapshot? = nil, followUpDraw: Draw? = nil
     ) -> SampleScenario {
-        SampleScenario(id: id, title: title, userID: viewer.id, snapshot: snapshot, draw: draw, followUp: followUp)
+        SampleScenario(id: id, title: title, userID: viewer.id, snapshot: snapshot, draw: draw, followUp: followUp, followUpDraw: followUpDraw)
     }
 
     // MARK: Pieces
@@ -268,13 +278,14 @@ private struct SampleBuilder {
         turnSkips: Int = 0,
         pile: Int = 0,
         scores: [[Int]] = [[0, 0], [0, 0], [0, 0]],
-        finishedAt: Date? = nil
+        finishedAt: Date? = nil,
+        lastActivityAt: Date? = nil
     ) -> Room {
         Room(
             id: Self.roomID, code: "K7Q2", hostID: SampleCast.alex.id, phase: phase, round: round,
             teamNames: Self.teamNames, settings: settings, submissionDeadline: deadline, currentTeam: currentTeam,
             turnIdx: turnIdx, turnPlayerID: turnPlayer?.id, turnEndsAt: turnEndsAt, turnGot: turnGot,
-            turnSkips: turnSkips, pileCount: pile, scores: scores, lastActivityAt: finishedAt ?? now,
+            turnSkips: turnSkips, pileCount: pile, scores: scores, lastActivityAt: lastActivityAt ?? finishedAt ?? now,
             createdAt: createdAt, finishedAt: finishedAt
         )
     }
@@ -380,17 +391,31 @@ private struct SampleBuilder {
 
     // MARK: Playing
 
+    private enum TurnPhase {
+        /// Assigned, Start Turn not pressed: no timer.
+        case ready
+        /// Start Turn just returned: full timer, nothing scored (`start_turn` resets the counters only).
+        case justStarted
+        /// Two names scored, 38 seconds left.
+        case underway
+    }
+
     /// Round 1. Alex (team 0) guessed 3, Drew (team 1) guessed 2, now Blair (team 0, cursor 1) is up.
-    /// `running` false is the moment before Start Turn.
-    private func playing(skip: SkipMode, running: Bool, turnSkips: Int = 0) -> RoomSnapshot {
+    private func playing(skip: SkipMode, phase: TurnPhase, turnSkips: Int = 0) -> RoomSnapshot {
         let (turns, idx) = history([TurnPlan(round: 1, team: 0, count: 3), TurnPlan(round: 1, team: 1, count: 2)], endingAt: now - 90, skip: skip)
-        let got = running ? 2 : 0
+        let got = phase == .underway ? 2 : 0
+        let endsAt: Date?
+        switch phase {
+        case .ready: endsAt = nil
+        case .justStarted: endsAt = now + 60
+        case .underway: endsAt = now + 38
+        }
         let created = now - 600
         return snapshot(
             room(
                 phase: .playing, round: 1, createdAt: created, settings: settings(skip: skip),
                 deadline: created + 60 + 120, currentTeam: 0, turnIdx: idx, turnPlayer: .blair,
-                turnEndsAt: running ? now + 38 : nil, turnGot: got, turnSkips: running ? turnSkips : 0,
+                turnEndsAt: endsAt, turnGot: got, turnSkips: phase == .underway ? turnSkips : 0,
                 pile: 18 - 5 - got, scores: [[3 + got, 2], [0, 0], [0, 0]]
             ),
             teamed(submitted: Set(Self.seats.keys)) + [player(.gray, team: nil, role: .spectator)],
@@ -458,7 +483,10 @@ private struct SampleBuilder {
         return snapshot(
             room(
                 phase: .finished, round: 3, createdAt: now - 3000, settings: settings(skip: .onePerTurn),
-                deadline: now - 3000 + 180, turnIdx: cursor, scores: rounds, finishedAt: now - 30
+                deadline: now - 3000 + 180, turnIdx: cursor, scores: rounds,
+                // The last turn is written, then finished_at (successive clock_timestamp() calls); a player leaving
+                // afterwards bumps last_activity_at.
+                finishedAt: now - 30 + 0.002, lastActivityAt: frankieLeft ? now - 10 : nil
             ),
             players,
             turns
