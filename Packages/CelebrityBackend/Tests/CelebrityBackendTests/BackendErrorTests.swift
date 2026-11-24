@@ -36,16 +36,23 @@ private let allCodes: [(String, BackendError)] = [
     ("host_still_active", .hostStillActive),
 ]
 
+private func envelope(_ code: String, _ message: String, details: String? = nil, hint: String? = nil) -> Data {
+    func json(_ value: String?) -> String { value.map { "\"\($0)\"" } ?? "null" }
+    return Data(#"{"code":"\#(code)","details":\#(json(details)),"hint":\#(json(hint)),"message":"\#(message)"}"#.utf8)
+}
+
 @Suite struct BackendErrorTests {
     @Test(arguments: allCodes)
-    func parsesEveryDomainCode(code: String, expected: BackendError) {
-        #expect(BackendError.parse(message: code) == expected)
+    func mapsEveryDomainCodeFromTheStructuredError(code: String, expected: BackendError) {
+        #expect(BackendError.from(code: "P0001", message: code, httpStatus: 400) == expected)
+        #expect(BackendError.from(postgrestBody: envelope("P0001", code), httpStatus: 400) == expected)
         #expect(expected.code == code)
     }
 
-    @Test func allCasesCoverEveryCode() {
+    @Test func domainCasesCoverEveryCode() {
         #expect(BackendError.domainCases.count == allCodes.count)
         #expect(Set(BackendError.domainCases.compactMap(\.code)) == Set(allCodes.map(\.0)))
+        #expect(Set(BackendError.domainCases.map(\.code)).count == allCodes.count)
     }
 
     @Test(arguments: allCodes)
@@ -53,46 +60,119 @@ private let allCodes: [(String, BackendError)] = [
         let message = expected.userMessage
         #expect(!message.isEmpty)
         #expect(message.count <= 90)
-        // Never show the raw server code to a player.
         #expect(!message.contains(code))
         #expect(!message.contains("_"))
         #expect(expected.errorDescription == message)
     }
 
-    @Test(arguments: ["wrong_phase: lobby", "P0001: wrong_phase", "  WRONG_PHASE\n", "ERROR: wrong_phase (SQLSTATE P0001)"])
-    func toleratesDecoration(message: String) {
-        #expect(BackendError.parse(message: message) == .wrongPhase)
+    @Test func nonDomainCasesHaveMessagesAndNoCode() {
+        for error in [BackendError.permissionDenied, .cancelled, .network("x"), .unknown("x")] {
+            #expect(!error.userMessage.isEmpty)
+            #expect(error.code == nil)
+        }
     }
 
-    @Test func doesNotMatchCodeInsideALongerWord() {
-        #expect(BackendError.parse(message: "not_member_of_anything") == .unknown("not_member_of_anything"))
-        #expect(BackendError.parse(message: "xwrong_phase") == .unknown("xwrong_phase"))
+    // MARK: Exact tokens only
+
+    @Test(arguments: ["wrong_phase: lobby", "P0001: wrong_phase", "WRONG_PHASE", "ERROR: wrong_phase", "not_member_of_anything", " wrong_phase "])
+    func p0001RequiresTheExactToken(message: String) {
+        let parsed = BackendError.from(code: "P0001", message: message, httpStatus: 400)
+        if message == " wrong_phase " {
+            // Surrounding whitespace is the only decoration tolerated.
+            #expect(parsed == .wrongPhase)
+        } else {
+            #expect(parsed == .unknown(message))
+        }
     }
 
-    @Test func unknownMessageIsKept() {
-        let error = BackendError.parse(message: "something odd happened")
-        #expect(error == .unknown("something odd happened"))
-        #expect(error.code == nil)
+    @Test func domainLookingTextUnderAnotherCodeIsNotADomainError() {
+        #expect(BackendError.from(code: "23505", message: "not_member", httpStatus: 409) == .unknown("not_member"))
+        #expect(BackendError.from(code: "PGRST116", message: "wrong_phase", httpStatus: 406) == .unknown("wrong_phase"))
+        #expect(BackendError.from(code: nil, message: "not_member", httpStatus: 400) == .unknown("not_member"))
+    }
+
+    @Test func unknownKeepsMessageForLogsOnly() {
+        let error = BackendError.from(code: "P0001", message: "something odd", httpStatus: 400)
+        #expect(error == .unknown("something odd"))
         #expect(!error.userMessage.contains("odd"))
+        #expect(BackendError.from(code: "XX000", message: nil, httpStatus: 500) == .unknown("XX000"))
     }
 
-    @Test func permissionDeniedMapsToNotAuthenticated() {
-        #expect(BackendError.parse(message: "permission denied for function create_room", sqlState: "42501") == .notAuthenticated)
-        #expect(BackendError.parse(message: "wrong_phase", sqlState: "P0001") == .wrongPhase)
+    // MARK: Authentication
+
+    @Test func expiredJWTIsNotAuthenticated() {
+        let body = envelope("PGRST301", "JWT expired")
+        #expect(BackendError.from(postgrestBody: body, httpStatus: 401) == .notAuthenticated)
+        #expect(BackendError.from(code: "PGRST303", message: "JWT claims invalid", httpStatus: 401) == .notAuthenticated)
+        #expect(BackendError.from(code: "PGRST302", message: "Anonymous access is disabled", httpStatus: 401) == .notAuthenticated)
     }
 
-    @Test func networkErrors() {
-        let urlError = URLError(.notConnectedToInternet)
-        #expect(BackendError.from(urlError) == .network(urlError.localizedDescription))
-        #expect(BackendError.network("x").code == nil)
-        #expect(BackendError.network("x").isNetwork)
-        #expect(!BackendError.wrongPhase.isNetwork)
+    @Test func signedOutAnonRoleDenialIsNotAuthenticated() {
+        let body = envelope("42501", "permission denied for function create_room")
+        #expect(BackendError.from(postgrestBody: body, httpStatus: 401) == .notAuthenticated)
+    }
+
+    @Test func authenticatedPermissionDenialIsNotSignedOut() {
+        let body = envelope("42501", "permission denied for table slips", details: "d", hint: "h")
+        #expect(BackendError.from(postgrestBody: body, httpStatus: 403) == .permissionDenied)
+        // Without a status we cannot tell, so do not claim the player is signed out.
+        #expect(BackendError.from(code: "42501", message: "permission denied", httpStatus: nil) == .permissionDenied)
+    }
+
+    @Test func any401WithoutAUsableBodyIsNotAuthenticated() {
+        #expect(BackendError.from(postgrestBody: Data("Unauthorized".utf8), httpStatus: 401) == .notAuthenticated)
+    }
+
+    // MARK: Envelopes
+
+    @Test func envelopeWithNullDetailsAndHintDecodes() {
+        let body = Data(#"{"code":"P0001","details":null,"hint":null,"message":"not_member"}"#.utf8)
+        #expect(BackendError.from(postgrestBody: body, httpStatus: 400) == .notMember)
+    }
+
+    @Test func envelopeWithDetailsAndHintDecodes() {
+        let body = envelope("P0001", "name_taken", details: "x", hint: "y")
+        #expect(BackendError.from(postgrestBody: body, httpStatus: 400) == .nameTaken)
+    }
+
+    @Test func nonJSONBodyBecomesUnknown() {
+        #expect(BackendError.from(postgrestBody: Data("<html>oops</html>".utf8), httpStatus: 400) == .unknown("<html>oops</html>"))
+        #expect(BackendError.from(postgrestBody: Data(), httpStatus: 400) == .unknown(""))
+    }
+
+    @Test(arguments: [502, 503, 504])
+    func gatewayFailuresAreNetwork(status: Int) {
+        #expect(BackendError.from(postgrestBody: Data("bad gateway".utf8), httpStatus: status).isNetwork)
+    }
+
+    // MARK: Transport and cancellation
+
+    @Test func urlErrorsAreNetworkExceptCancellation() {
+        let offline = URLError(.notConnectedToInternet)
+        #expect(BackendError.from(offline) == .network(offline.localizedDescription))
+        #expect(BackendError.from(URLError(.cancelled)) == .cancelled)
+        #expect(BackendError.from(CancellationError()) == .cancelled)
+    }
+
+    @Test func cancellationIsRecognisedInAnyForm() {
+        #expect(BackendError.isCancellation(CancellationError()))
+        #expect(BackendError.isCancellation(URLError(.cancelled)))
+        #expect(BackendError.isCancellation(BackendError.cancelled))
+        #expect(!BackendError.isCancellation(URLError(.timedOut)))
+        #expect(!BackendError.isCancellation(BackendError.wrongPhase))
+        #expect(BackendError.cancelled.isCancellation)
+        #expect(!BackendError.network("x").isCancellation)
     }
 
     @Test func fromPassesBackendErrorThroughAndWrapsOthers() {
         #expect(BackendError.from(BackendError.notHost) == .notHost)
         struct Other: Error {}
         if case .unknown = BackendError.from(Other()) {} else { Issue.record("expected .unknown") }
+    }
+
+    @Test func networkFlags() {
+        #expect(BackendError.network("x").isNetwork)
+        #expect(!BackendError.wrongPhase.isNetwork)
     }
 
     @Test func membershipLossIsOnlyNotMember() {

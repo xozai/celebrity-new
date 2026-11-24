@@ -10,7 +10,8 @@ import Foundation
 ///
 /// Show ``userMessage`` (or `localizedDescription`) to players. Never show ``code``.
 public enum BackendError: Error, Sendable, Equatable, LocalizedError {
-    /// `not_authenticated`: no session, or the account was deleted. Also used for SQLSTATE `42501`.
+    /// `not_authenticated`: no session, or the account was deleted. Also produced for an expired or invalid
+    /// JWT (`PGRST301`-`PGRST303`) and for HTTP 401.
     case notAuthenticated
     /// `invalid_name`: a player, team or room name is empty or too long.
     case invalidName
@@ -57,7 +58,8 @@ public enum BackendError: Error, Sendable, Equatable, LocalizedError {
     case turnNotStarted
     /// `turn_over`: the turn timer has expired.
     case turnOver
-    /// `invalid_token`: the draw token is missing or does not belong to the caller's draw.
+    /// `invalid_token`: the token argument was null. (A stale but well-formed token is not an error: the server
+    /// changes nothing and returns the current draw.)
     case invalidToken
     /// `skip_not_allowed`: skipping is off, or the one skip this turn is used.
     case skipNotAllowed
@@ -71,7 +73,12 @@ public enum BackendError: Error, Sendable, Equatable, LocalizedError {
     case alreadyHost
     /// `host_still_active`: the host was seen too recently to claim host.
     case hostStillActive
-    /// A transport failure (offline, timeout, TLS). The associated text is for logs only.
+    /// The signed-in user was refused by the database (SQLSTATE `42501` with HTTP 403). Not the same as signed out.
+    case permissionDenied
+    /// The call was cancelled (task cancellation or `URLError.cancelled`). **Never show this to a player**: ignore it.
+    /// Check with ``isCancellation``.
+    case cancelled
+    /// A transport failure (offline, timeout, TLS, gateway down). The associated text is for logs only.
     case network(String)
     /// Anything that is neither a known domain code nor a transport failure. The text is for logs only.
     case unknown(String)
@@ -119,7 +126,7 @@ public enum BackendError: Error, Sendable, Equatable, LocalizedError {
         case .cannotTargetSelf: "cannot_target_self"
         case .alreadyHost: "already_host"
         case .hostStillActive: "host_still_active"
-        case .network, .unknown: nil
+        case .permissionDenied, .cancelled, .network, .unknown: nil
         }
     }
 
@@ -156,6 +163,8 @@ public enum BackendError: Error, Sendable, Equatable, LocalizedError {
         case .cannotTargetSelf: "You can't do that to yourself."
         case .alreadyHost: "You're already the host."
         case .hostStillActive: "The host is still here."
+        case .permissionDenied: "You don't have permission to do that."
+        case .cancelled: "Cancelled."
         case .network: "Can't reach the server. Check your connection."
         case .unknown: "Something went wrong. Please try again."
         }
@@ -174,33 +183,74 @@ public enum BackendError: Error, Sendable, Equatable, LocalizedError {
     /// this, the seat is gone (kicked, or the room was deleted). See ``GameBackend/roomLosses``.
     public var isMembershipLoss: Bool { self == .notMember }
 
-    /// Maps a server error message to a case.
+    /// True for ``cancelled``. Cancellation is not a failure: do not alert.
+    public var isCancellation: Bool { self == .cancelled }
+
+    /// True if `error` is a cancellation in any form: `CancellationError`, `URLError.cancelled` or ``cancelled``.
+    /// - Parameter error: Any thrown error.
+    public static func isCancellation(_ error: any Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return (error as? BackendError) == .cancelled
+    }
+
+    /// Maps a structured PostgREST error to a case.
     ///
-    /// Domain errors carry the code as a whole word in the message (possibly with decoration such as
-    /// `P0001:` or trailing detail). The first whole word that is a known code wins; matching is case
-    /// insensitive. A code embedded in a longer word does not match.
+    /// The migrations raise domain errors as `raise exception '<code>'`, which PostgREST reports with
+    /// `code: "P0001"` and the code as the entire `message`. So:
+    /// - `P0001` with a message equal to a domain code (surrounding whitespace ignored) maps to that case.
+    ///   Any other `P0001` message, and a domain-looking message under any other code, is ``unknown(_:)``.
+    /// - `PGRST301`, `PGRST302`, `PGRST303` (JWT problems) and any HTTP 401 map to ``notAuthenticated``.
+    /// - `42501` (permission denied) maps to ``notAuthenticated`` when the status is 401 (the signed-out `anon`
+    ///   role) and to ``permissionDenied`` otherwise, because an authenticated denial is not "signed out".
+    /// - HTTP 502, 503 and 504 map to ``network(_:)``.
+    /// - Anything else is ``unknown(_:)`` carrying the message (or code).
     /// - Parameters:
-    ///   - message: The PostgREST or database error message.
-    ///   - sqlState: The SQLSTATE if known. `42501` (no execute grant, the signed-out `anon` role)
-    ///     maps to ``notAuthenticated``.
-    /// - Returns: The matching case, or ``unknown(_:)`` carrying the message.
-    public static func parse(message: String, sqlState: String? = nil) -> BackendError {
-        let words = message.lowercased().split { !($0.isLetter || $0 == "_") }
-        for word in words {
-            if let match = domainCases.first(where: { $0.code == String(word) }) {
-                return match
-            }
+    ///   - code: The envelope's `code`.
+    ///   - message: The envelope's `message`.
+    ///   - httpStatus: The HTTP status of the response, if known.
+    public static func from(code: String?, message: String?, httpStatus: Int?) -> BackendError {
+        if code == "P0001", let message {
+            let token = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let match = domainCases.first(where: { $0.code == token }) { return match }
+            return .unknown(message)
         }
-        if sqlState == "42501" { return .notAuthenticated }
-        return .unknown(message)
+        if let code {
+            if ["PGRST301", "PGRST302", "PGRST303"].contains(code) { return .notAuthenticated }
+            if code == "42501" { return httpStatus == 401 ? .notAuthenticated : .permissionDenied }
+        }
+        if httpStatus == 401 { return .notAuthenticated }
+        if let httpStatus, [502, 503, 504].contains(httpStatus) {
+            return .network(message ?? "HTTP \(httpStatus)")
+        }
+        return .unknown(message ?? code ?? "")
+    }
+
+    /// Maps the raw body of a failed PostgREST response (`{"code":..,"details":..,"hint":..,"message":..}`).
+    /// A body that is not that JSON object is treated as a message with no code. See
+    /// ``from(code:message:httpStatus:)`` for the rules.
+    /// - Parameters:
+    ///   - postgrestBody: The response body.
+    ///   - httpStatus: The HTTP status of the response, if known.
+    public static func from(postgrestBody: Data, httpStatus: Int?) -> BackendError {
+        struct Envelope: Decodable {
+            var code: String?
+            var message: String?
+        }
+        if let envelope = try? JSONDecoder().decode(Envelope.self, from: postgrestBody) {
+            return from(code: envelope.code, message: envelope.message, httpStatus: httpStatus)
+        }
+        return from(code: nil, message: String(decoding: postgrestBody, as: UTF8.self), httpStatus: httpStatus)
     }
 
     /// Converts any thrown error into a ``BackendError``.
     ///
-    /// A `BackendError` passes through, `URLError` becomes ``network(_:)``, and anything else
-    /// becomes ``unknown(_:)``.
+    /// A `BackendError` passes through. `CancellationError` and `URLError.cancelled` become ``cancelled``
+    /// (never shown to players). Other `URLError`s become ``network(_:)``. Anything else becomes ``unknown(_:)``.
+    /// - Parameter error: The error to convert.
     public static func from(_ error: any Error) -> BackendError {
         if let backend = error as? BackendError { return backend }
+        if isCancellation(error) { return .cancelled }
         if let urlError = error as? URLError { return .network(urlError.localizedDescription) }
         return .unknown(String(describing: error))
     }
