@@ -26,7 +26,7 @@ public struct SampleCast: Sendable, Equatable {
 
 /// Ready-made recommendation rows used as the fake's defaults.
 public enum SampleSuggestions {
-    /// Twelve well-known names with descriptions, across categories.
+    /// Twenty-four well-known names with descriptions, across categories, in rough order of fame.
     public static let all: [CelebritySuggestion] = [
         CelebritySuggestion(name: "Tom Hanks", description: "American actor", category: .filmTV, sources: ["wikipedia", "imdb"]),
         CelebritySuggestion(name: "Taylor Swift", description: "American singer-songwriter", category: .music, sources: ["wikipedia"]),
@@ -40,6 +40,18 @@ public enum SampleSuggestions {
         CelebritySuggestion(name: "Harry Potter", description: "Fictional wizard", category: .fictional, sources: ["wikipedia"]),
         CelebritySuggestion(name: "Elvis Presley", description: "American singer", category: .music, sources: ["wikipedia"]),
         CelebritySuggestion(name: "Oprah Winfrey", description: "American talk show host", category: .filmTV, sources: ["wikipedia", "imdb"]),
+        CelebritySuggestion(name: "Tom Cruise", description: "American actor", category: .filmTV, sources: ["wikipedia", "imdb"]),
+        CelebritySuggestion(name: "Michael Jordan", description: "American basketball player", category: .sports, sources: ["wikipedia"]),
+        CelebritySuggestion(name: "Albert Einstein", description: "German-born physicist", category: .publicFigure, sources: ["wikipedia"]),
+        CelebritySuggestion(name: "Marilyn Monroe", description: "American actress", category: .filmTV, sources: ["wikipedia", "imdb"]),
+        CelebritySuggestion(name: "Bruce Lee", description: "Hong Kong-American martial artist", category: .filmTV, sources: ["wikipedia", "imdb"]),
+        CelebritySuggestion(name: "Frida Kahlo", description: "Mexican painter", category: .publicFigure, sources: ["wikipedia"]),
+        CelebritySuggestion(name: "Dolly Parton", description: "American singer-songwriter", category: .music, sources: ["wikipedia"]),
+        CelebritySuggestion(name: "Mister Rogers", description: "American television host", category: .filmTV, sources: ["wikipedia"]),
+        CelebritySuggestion(name: "Darth Vader", description: "Fictional Star Wars villain", category: .fictional, sources: ["wikipedia"]),
+        CelebritySuggestion(name: "Simone Biles", description: "American gymnast", category: .sports, sources: ["wikipedia"]),
+        CelebritySuggestion(name: "David Bowie", description: "English singer", category: .music, sources: ["wikipedia"]),
+        CelebritySuggestion(name: "Winston Churchill", description: "British prime minister", category: .publicFigure, sources: ["wikipedia"]),
     ]
 }
 
@@ -58,21 +70,37 @@ public struct SampleScenario: Sendable, Equatable, Identifiable {
         case lobbyGuest
         /// Lobby with uneven teams (team 1 has one player), viewed by the host. Start is disabled with a reason.
         case lobbyUnevenHost
-        /// Submitting, viewed by a player who has not submitted yet.
+        /// Submitting, viewed by a player who has not submitted yet. Recommendations on.
         case submittingEditing
         /// Submitting, viewed by a player who already submitted.
         case submittingWaiting
         /// Submitting, viewed by a spectator.
         case submittingSpectator
-        /// Round 1, a turn running, viewed by the clue-giver (host). Includes the draw. Skip mode is one per turn.
+        /// Submitting with the host's recommendations switch off, viewed by a player who has not submitted.
+        case submittingRecommendationsOff
+        /// The submission window has expired and nothing was submitted. ``SampleScenario/followUp`` is the lobby
+        /// the server returns to after `close_submissions()`.
+        case submittingExpiredEmpty
+        /// Round 1: Blair is the assigned clue-giver but has not started the turn (`turn_ends_at` is nil). Viewed by
+        /// Blair. ``SampleScenario/followUp`` is the running snapshot after `start_turn()`.
+        case playingClueGiverReady
+        /// Round 1, a turn running, viewed by the clue-giver (Blair). Skip mode one per turn, none used yet. Has a draw.
         case playingClueGiver
-        /// Round 1, a turn running, viewed by a guesser on the clue-giver's team.
+        /// As ``playingClueGiver`` with skipping off.
+        case playingClueGiverSkipOff
+        /// As ``playingClueGiver`` with the one skip already used (`turn_skips` 1).
+        case playingClueGiverSkipUsed
+        /// As ``playingClueGiver`` with unlimited skipping and three skips so far.
+        case playingClueGiverUnlimited
+        /// Round 1, a turn running, viewed by a guesser on the clue-giver's team (Casey).
         case playingGuesser
-        /// Round 1, a turn running, viewed by a player on the other team.
+        /// Round 1, a turn running, viewed by a player on the other team (Drew).
         case playingOpponent
-        /// Round 1, a turn running, viewed by a spectator.
+        /// Round 1, a turn running, viewed by a spectator (Gray).
         case playingSpectator
-        /// Round 1 in `playing` but no player can be assigned (`nextUp` is nil), viewed by the host.
+        /// Round 1 in `playing` but no player can be assigned (`nextUp` is nil), viewed by the host. The team whose turn
+        /// it was is kept (`current_team`). ``SampleScenario/followUp`` is the snapshot after the host assigns the
+        /// spectator to team 1, which makes the turn assignable again.
         case stalledHost
         /// The stalled room viewed by a non-host.
         case stalledGuest
@@ -80,7 +108,7 @@ public struct SampleScenario: Sendable, Equatable, Identifiable {
         case roundEndHost
         /// Round 1 over, viewed by a guest.
         case roundEndGuest
-        /// Game over, team 0 won 30-24. History includes an anonymised turn. Viewed by the host.
+        /// Game over, team 0 won 30-24. A departed player's turns are anonymised. Viewed by the host.
         case finishedWinner
         /// Game over, a 27-27 tie. Viewed by the host.
         case finishedTie
@@ -96,6 +124,10 @@ public struct SampleScenario: Sendable, Equatable, Identifiable {
     public var snapshot: RoomSnapshot
     /// The clue-giver's private draw, or nil for every other viewer.
     public var draw: Draw?
+    /// The snapshot the server publishes after this state's natural next step (host assigns the spectator, the empty
+    /// window closes, the clue-giver starts the turn), or nil if the scenario has none. Script it with
+    /// ``FakeGameBackend/script(_:snapshots:)`` to replay the transition.
+    public var followUp: RoomSnapshot?
 
     /// Creates a scenario from parts.
     /// - Parameters:
@@ -104,15 +136,17 @@ public struct SampleScenario: Sendable, Equatable, Identifiable {
     ///   - userID: The viewer.
     ///   - snapshot: The room.
     ///   - draw: The viewer's private draw, if any.
-    public init(id: ID, title: String, userID: UUID, snapshot: RoomSnapshot, draw: Draw? = nil) {
+    ///   - followUp: The snapshot after the natural next step, if any.
+    public init(id: ID, title: String, userID: UUID, snapshot: RoomSnapshot, draw: Draw? = nil, followUp: RoomSnapshot? = nil) {
         self.id = id
         self.title = title
         self.userID = userID
         self.snapshot = snapshot
         self.draw = draw
+        self.followUp = followUp
     }
 
-    /// The same room seen by another user. The draw is dropped, since only the clue-giver has one.
+    /// The same room seen by another user. The draw is dropped, since only the clue-giver has one. The follow-up is kept.
     /// - Parameter userID: Any user in the snapshot's players.
     public func viewing(as userID: UUID) -> SampleScenario {
         var copy = self
@@ -138,6 +172,8 @@ public struct SampleScenario: Sendable, Equatable, Identifiable {
 
 // MARK: - Builder
 
+/// Builds the scenarios from the rules in supabase/migrations: round starters (`_start_round`), rotation cursors
+/// (`_finish_turn`), skip limits (`skip_slip`) and timestamps inside the room's lifetime.
 private struct SampleBuilder {
     let now: Date
 
@@ -148,227 +184,284 @@ private struct SampleBuilder {
         "Barack Obama", "Meryl Streep", "Cleopatra", "Harry Potter", "Elvis Presley", "Oprah Winfrey",
         "Albert Einstein", "Marilyn Monroe", "Bruce Lee", "Frida Kahlo", "Mister Rogers", "Dolly Parton",
     ]
+    /// Original seating: team rosters in seat order.
+    static let roster: [[SampleCast]] = [[.alex, .blair, .casey], [.drew, .emery, .frankie]]
+    static let seats: [UUID: Int] = Dictionary(
+        uniqueKeysWithValues: [SampleCast.alex, .blair, .casey, .drew, .emery, .frankie, .gray].enumerated().map { ($1.id, $0 + 1) }
+    )
+    static let turnLength: TimeInterval = 70
+    static let blairDraw = Draw(
+        id: UUID(uuidString: "C3000000-0000-4000-8000-000000000001")!,
+        name: "Frida Kahlo",
+        token: UUID(uuidString: "D4000000-0000-4000-8000-000000000001")!
+    )
+
+    // MARK: Scenarios
 
     func scenario(_ id: SampleScenario.ID) -> SampleScenario {
         switch id {
-        case .lobbyHost:
-            make(id, "Lobby (host)", .alex, lobby(unassigned: [.gray]))
-        case .lobbyGuest:
-            make(id, "Lobby (guest)", .blair, lobby(unassigned: [.gray]))
-        case .lobbyUnevenHost:
-            make(id, "Lobby, uneven teams (host)", .alex, lobby(unassigned: [.emery, .gray], dropFromTeams: [.frankie]))
-        case .submittingEditing:
-            make(id, "Submitting (editing)", .alex, submitting())
-        case .submittingWaiting:
-            make(id, "Submitting (waiting)", .blair, submitting())
-        case .submittingSpectator:
-            make(id, "Submitting (spectator)", .gray, submitting())
+        case .lobbyHost: make(id, "Lobby (host)", .alex, lobby())
+        case .lobbyGuest: make(id, "Lobby (guest)", .blair, lobby())
+        case .lobbyUnevenHost: make(id, "Lobby, uneven teams (host)", .alex, lobbyUneven())
+        case .submittingEditing: make(id, "Submitting (editing)", .alex, submitting())
+        case .submittingWaiting: make(id, "Submitting (waiting)", .blair, submitting())
+        case .submittingSpectator: make(id, "Submitting (spectator)", .gray, submitting())
+        case .submittingRecommendationsOff: make(id, "Submitting, recommendations off", .alex, submitting(suggestions: false))
+        case .submittingExpiredEmpty:
+            make(id, "Submitting, window expired empty", .alex, submittingExpiredEmpty(), followUp: lobbyAfterEmptyWindow())
+        case .playingClueGiverReady:
+            make(id, "Playing, ready to start (clue-giver)", .blair, playing(skip: .onePerTurn, running: false),
+                 draw: nil, followUp: playing(skip: .onePerTurn, running: true))
         case .playingClueGiver:
-            make(id, "Playing (clue-giver)", .alex, playing(), draw: Draw(
-                id: UUID(uuidString: "C3000000-0000-4000-8000-000000000001")!,
-                name: "Beyoncé",
-                token: UUID(uuidString: "D4000000-0000-4000-8000-000000000001")!
-            ))
-        case .playingGuesser:
-            make(id, "Playing (guesser)", .blair, playing())
-        case .playingOpponent:
-            make(id, "Playing (opponent)", .drew, playing())
-        case .playingSpectator:
-            make(id, "Playing (spectator)", .gray, playing())
-        case .stalledHost:
-            make(id, "Stalled, no clue-giver (host)", .alex, stalled())
-        case .stalledGuest:
-            make(id, "Stalled, no clue-giver (guest)", .blair, stalled())
-        case .roundEndHost:
-            make(id, "Round end (host)", .alex, roundEnd())
-        case .roundEndGuest:
-            make(id, "Round end (guest)", .blair, roundEnd())
+            make(id, "Playing (clue-giver)", .blair, playing(skip: .onePerTurn, running: true), draw: Self.blairDraw)
+        case .playingClueGiverSkipOff:
+            make(id, "Playing, skipping off (clue-giver)", .blair, playing(skip: .off, running: true), draw: Self.blairDraw)
+        case .playingClueGiverSkipUsed:
+            make(id, "Playing, skip used (clue-giver)", .blair, playing(skip: .onePerTurn, running: true, turnSkips: 1), draw: Self.blairDraw)
+        case .playingClueGiverUnlimited:
+            make(id, "Playing, unlimited skips (clue-giver)", .blair, playing(skip: .unlimited, running: true, turnSkips: 3), draw: Self.blairDraw)
+        case .playingGuesser: make(id, "Playing (guesser)", .casey, playing(skip: .onePerTurn, running: true))
+        case .playingOpponent: make(id, "Playing (opponent)", .drew, playing(skip: .onePerTurn, running: true))
+        case .playingSpectator: make(id, "Playing (spectator)", .gray, playing(skip: .onePerTurn, running: true))
+        case .stalledHost: make(id, "Stalled, no clue-giver (host)", .alex, stalled(), followUp: stalledAfterAssignment())
+        case .stalledGuest: make(id, "Stalled, no clue-giver (guest)", .blair, stalled(), followUp: stalledAfterAssignment())
+        case .roundEndHost: make(id, "Round end (host)", .alex, roundEnd())
+        case .roundEndGuest: make(id, "Round end (guest)", .blair, roundEnd())
         case .finishedWinner:
-            make(id, "Finished, winner (host)", .alex, finished(rounds: [[10, 8], [9, 9], [11, 7]], anonymiseFormerPlayer: true))
+            make(id, "Finished, winner (host)", .alex, finished(rounds: [[10, 8], [9, 9], [11, 7]], frankieLeft: true))
         case .finishedTie:
-            make(id, "Finished, tie (host)", .alex, finished(rounds: [[10, 8], [8, 10], [9, 9]], anonymiseFormerPlayer: false))
+            make(id, "Finished, tie (host)", .alex, finished(rounds: [[10, 8], [8, 10], [9, 9]], frankieLeft: false))
         }
     }
 
-    private func make(_ id: SampleScenario.ID, _ title: String, _ viewer: SampleCast, _ snapshot: RoomSnapshot, draw: Draw? = nil) -> SampleScenario {
-        SampleScenario(id: id, title: title, userID: viewer.id, snapshot: snapshot, draw: draw)
+    private func make(
+        _ id: SampleScenario.ID, _ title: String, _ viewer: SampleCast, _ snapshot: RoomSnapshot,
+        draw: Draw? = nil, followUp: RoomSnapshot? = nil
+    ) -> SampleScenario {
+        SampleScenario(id: id, title: title, userID: viewer.id, snapshot: snapshot, draw: draw, followUp: followUp)
     }
 
     // MARK: Pieces
 
-    private func settings(skip: SkipMode = .off) -> Settings {
-        Settings(slipsPerPlayer: 3, turnSeconds: 60, submissionSeconds: 120, skipMode: skip, suggestionsEnabled: true)
+    private func settings(skip: SkipMode = .off, suggestions: Bool = true) -> Settings {
+        Settings(slipsPerPlayer: 3, turnSeconds: 60, submissionSeconds: 120, skipMode: skip, suggestionsEnabled: suggestions)
     }
 
-    private func player(_ who: SampleCast, seat: Int, team: Int?, role: PlayerRole = .player, submitted: Bool = false) -> Player {
-        Player(roomID: Self.roomID, userID: who.id, name: who.name, team: team, role: role, seat: seat, submitted: submitted, lastSeenAt: now)
+    private func player(_ who: SampleCast, team: Int?, role: PlayerRole = .player, submitted: Bool = false) -> Player {
+        Player(
+            roomID: Self.roomID, userID: who.id, name: who.name, team: team, role: role,
+            seat: Self.seats[who.id]!, submitted: submitted, lastSeenAt: now
+        )
     }
 
     private func room(
         phase: RoomPhase,
         round: Int,
-        host: SampleCast?,
+        createdAt: Date,
         settings: Settings,
         deadline: Date? = nil,
         currentTeam: Int? = nil,
+        turnIdx: [Int] = [0, 0],
         turnPlayer: SampleCast? = nil,
         turnEndsAt: Date? = nil,
         turnGot: Int = 0,
+        turnSkips: Int = 0,
         pile: Int = 0,
         scores: [[Int]] = [[0, 0], [0, 0], [0, 0]],
         finishedAt: Date? = nil
     ) -> Room {
         Room(
-            id: Self.roomID,
-            code: "K7Q2",
-            hostID: host?.id,
-            phase: phase,
-            round: round,
-            teamNames: Self.teamNames,
-            settings: settings,
-            submissionDeadline: deadline,
-            currentTeam: currentTeam,
-            turnIdx: [0, 1],
-            turnPlayerID: turnPlayer?.id,
-            turnEndsAt: turnEndsAt,
-            turnGot: turnGot,
-            turnSkips: 0,
-            pileCount: pile,
-            scores: scores,
-            lastActivityAt: now,
-            createdAt: now.addingTimeInterval(-600),
-            finishedAt: finishedAt
+            id: Self.roomID, code: "K7Q2", hostID: SampleCast.alex.id, phase: phase, round: round,
+            teamNames: Self.teamNames, settings: settings, submissionDeadline: deadline, currentTeam: currentTeam,
+            turnIdx: turnIdx, turnPlayerID: turnPlayer?.id, turnEndsAt: turnEndsAt, turnGot: turnGot,
+            turnSkips: turnSkips, pileCount: pile, scores: scores, lastActivityAt: finishedAt ?? now,
+            createdAt: createdAt, finishedAt: finishedAt
         )
     }
 
     private func snapshot(_ room: Room, _ players: [Player], _ turns: [Turn] = []) -> RoomSnapshot {
-        RoomSnapshot(room: room, players: players, turns: turns, serverNow: now)
+        RoomSnapshot(room: room, players: players.sorted { $0.seat < $1.seat }, turns: turns, serverNow: now)
     }
 
-    /// Alex, Blair, Casey on team 0 and Drew, Emery, Frankie on team 1, with the given submitted flags.
-    private func sixPlayers(submitted: Set<UUID> = []) -> [Player] {
-        let cast: [(SampleCast, Int)] = [
-            (.alex, 0), (.blair, 0), (.casey, 0), (.drew, 1), (.emery, 1), (.frankie, 1),
-        ]
-        return cast.enumerated().map { index, entry in
-            player(entry.0, seat: index + 1, team: entry.1, submitted: submitted.contains(entry.0.id))
+    private func teamed(submitted: Set<UUID> = []) -> [Player] {
+        var result: [Player] = []
+        for (team, members) in Self.roster.enumerated() {
+            for who in members { result.append(player(who, team: team, submitted: submitted.contains(who.id))) }
         }
+        return result
     }
 
-    // MARK: Phases
+    // MARK: Lobby and submission
 
-    private func lobby(unassigned: [SampleCast], dropFromTeams: [SampleCast] = []) -> RoomSnapshot {
-        var players = sixPlayers().filter { who in !dropFromTeams.contains { $0.id == who.userID } && !unassigned.contains { $0.id == who.userID } }
-        // Unassigned players keep their seat but have no team.
-        let seats = Dictionary(uniqueKeysWithValues: ([SampleCast.alex, .blair, .casey, .drew, .emery, .frankie, .gray]).enumerated().map { ($1.id, $0 + 1) })
-        for who in unassigned { players.append(player(who, seat: seats[who.id]!, team: nil)) }
-        // A player dropped from the teams (uneven lobby) is simply not in the room.
-        players.sort { $0.seat < $1.seat }
-        players = players.enumerated().map { index, p in var p = p; p.seat = index + 1; return p }
-        return snapshot(room(phase: .lobby, round: 0, host: .alex, settings: settings()), players)
+    private func lobby() -> RoomSnapshot {
+        snapshot(room(phase: .lobby, round: 0, createdAt: now - 300, settings: settings()), teamed() + [player(.gray, team: nil)])
     }
 
-    private func submitting() -> RoomSnapshot {
-        var players = sixPlayers(submitted: [SampleCast.blair.id, SampleCast.drew.id, SampleCast.emery.id])
-        players.append(player(.gray, seat: 7, team: nil, role: .spectator))
-        return snapshot(
-            room(phase: .submitting, round: 0, host: .alex, settings: settings(), deadline: now.addingTimeInterval(90)),
-            players
-        )
-    }
-
-    private func allSubmittedPlayers() -> [Player] {
-        var players = sixPlayers(submitted: Set(sixPlayers().map(\.userID)))
-        players.append(player(.gray, seat: 7, team: nil, role: .spectator))
-        return players
-    }
-
-    private func playing() -> RoomSnapshot {
-        let earlier = Turn(
-            id: 1, roomID: Self.roomID, round: 1, team: 1, playerID: SampleCast.drew.id, playerName: "Drew",
-            guessed: ["Sherlock Holmes"], skipped: 0, endedAt: now.addingTimeInterval(-70)
-        )
-        return snapshot(
-            room(
-                phase: .playing, round: 1, host: .alex, settings: settings(skip: .onePerTurn),
-                currentTeam: 0, turnPlayer: .alex, turnEndsAt: now.addingTimeInterval(38), turnGot: 2,
-                pile: 15, scores: [[2, 1], [0, 0], [0, 0]]
-            ),
-            allSubmittedPlayers(),
-            [earlier]
-        )
-    }
-
-    private func stalled() -> RoomSnapshot {
+    /// Team 1 has one player (Drew); Emery and Gray have no team. Frankie never joined.
+    private func lobbyUneven() -> RoomSnapshot {
         let players = [
-            player(.alex, seat: 1, team: 0, submitted: true),
-            player(.blair, seat: 2, team: 1, submitted: true),
-            player(.gray, seat: 3, team: nil, role: .spectator),
+            player(.alex, team: 0), player(.blair, team: 0), player(.casey, team: 0),
+            player(.drew, team: 1), player(.emery, team: nil), player(.gray, team: nil),
         ]
-        let earlier = [
-            Turn(id: 1, roomID: Self.roomID, round: 1, team: 0, playerID: SampleCast.alex.id, playerName: "Alex",
-                 guessed: ["Tom Hanks", "Cleopatra"], skipped: 0, endedAt: now.addingTimeInterval(-120)),
-            Turn(id: 2, roomID: Self.roomID, round: 1, team: 1, playerID: SampleCast.blair.id, playerName: "Blair",
-                 guessed: ["Elvis Presley"], skipped: 0, endedAt: now.addingTimeInterval(-60)),
-        ]
+        return snapshot(room(phase: .lobby, round: 0, createdAt: now - 300, settings: settings()), players)
+    }
+
+    private func submitting(suggestions: Bool = true) -> RoomSnapshot {
+        let submitted: Set<UUID> = [SampleCast.blair.id, SampleCast.drew.id, SampleCast.emery.id]
         return snapshot(
-            room(phase: .playing, round: 1, host: .alex, settings: settings(), pile: 9, scores: [[2, 1], [0, 0], [0, 0]]),
-            players,
-            earlier
+            room(phase: .submitting, round: 0, createdAt: now - 300, settings: settings(suggestions: suggestions), deadline: now + 90),
+            teamed(submitted: submitted) + [player(.gray, team: nil, role: .spectator)]
         )
     }
 
-    private func roundEnd() -> RoomSnapshot {
+    private func submittingExpiredEmpty() -> RoomSnapshot {
         snapshot(
-            room(phase: .roundEnd, round: 1, host: .alex, settings: settings(), scores: [[10, 8], [0, 0], [0, 0]]),
-            allSubmittedPlayers(),
-            turns(forRoundsScores: [[10, 8]], anonymiseFormerPlayer: false)
+            room(phase: .submitting, round: 0, createdAt: now - 300, settings: settings(), deadline: now - 2),
+            teamed() + [player(.gray, team: nil, role: .spectator)]
         )
     }
 
-    private func finished(rounds: [[Int]], anonymiseFormerPlayer: Bool) -> RoomSnapshot {
-        var players = allSubmittedPlayers()
-        if anonymiseFormerPlayer { players = players.filter { $0.userID != SampleCast.frankie.id }.enumerated().map { var p = $1; p.seat = $0 + 1; return p } }
-        return snapshot(
-            room(phase: .finished, round: 3, host: .alex, settings: settings(), scores: rounds, finishedAt: now.addingTimeInterval(-30)),
-            players,
-            turns(forRoundsScores: rounds, anonymiseFormerPlayer: anonymiseFormerPlayer)
+    /// `close_submissions` with no slips: back to the lobby, deadline cleared, submitted flags cleared. Players who were
+    /// made spectators by `start_game` stay spectators.
+    private func lobbyAfterEmptyWindow() -> RoomSnapshot {
+        snapshot(
+            room(phase: .lobby, round: 0, createdAt: now - 300, settings: settings()),
+            teamed() + [player(.gray, team: nil, role: .spectator)]
         )
     }
 
     // MARK: History
 
-    /// Builds a turn history whose guessed counts add up to each round's scores. Teams alternate, three turns each,
-    /// rotating through their players. Every other turn has one skip. With `anonymiseFormerPlayer`, Frankie (who has left
-    /// and deleted their data) appears as "Former player" with no player id.
-    private func turns(forRoundsScores scores: [[Int]], anonymiseFormerPlayer: Bool) -> [Turn] {
-        let teamPlayers: [[SampleCast]] = [[.alex, .blair, .casey], [.drew, .emery, .frankie]]
-        var result: [Turn] = []
-        var nextName = 0
-        var nextID: Int64 = 1
-        var clock = now.addingTimeInterval(-Double(scores.count * 6 * 60 + 60))
-        for (roundIndex, pair) in scores.enumerated() {
-            let split = pair.map { total in (0..<3).map { total / 3 + ($0 < total % 3 ? 1 : 0) } }
+    private struct TurnPlan {
+        var round: Int
+        var team: Int
+        var count: Int
+    }
+
+    /// Plans every turn of the given completed rounds. The round starter is team `(round - 1) % 2`, teams alternate,
+    /// each team takes three turns, and the guessed total of each team is split as evenly as possible.
+    private func plans(rounds scores: [[Int]]) -> [TurnPlan] {
+        var result: [TurnPlan] = []
+        for (index, pair) in scores.enumerated() {
+            let starter = index % 2
             for slot in 0..<6 {
-                // Team 0 and team 1 alternate; the slot's turn index within its team is slot / 2.
-                let team = slot % 2
-                let turnIndex = slot / 2
-                let who = teamPlayers[team][turnIndex]
-                let count = split[team][turnIndex]
-                let guessed = (0..<count).map { _ -> String in
-                    defer { nextName += 1 }
-                    return Self.names[nextName % Self.names.count]
-                }
-                clock = clock.addingTimeInterval(60)
-                let anonymous = anonymiseFormerPlayer && who.id == SampleCast.frankie.id
-                result.append(Turn(
-                    id: nextID, roomID: Self.roomID, round: roundIndex + 1, team: team,
-                    playerID: anonymous ? nil : who.id, playerName: anonymous ? "Former player" : who.name,
-                    guessed: guessed, skipped: slot % 2 == 0 ? 1 : 0, endedAt: clock
-                ))
-                nextID += 1
+                let team = (starter + slot) % 2
+                let turn = slot / 2
+                let total = pair[team]
+                result.append(TurnPlan(round: index + 1, team: team, count: total / 3 + (turn < total % 3 ? 1 : 0)))
             }
         }
         return result
+    }
+
+    /// Writes the history for `plans`, rotating clue-givers from cursor `[0, 0]` and ending the last turn at `anchor`.
+    /// Returns the turns and the rotation cursors after them. `skipMode` bounds the skip counts.
+    private func history(_ plans: [TurnPlan], endingAt anchor: Date, skip: SkipMode, left: Set<UUID> = []) -> (turns: [Turn], idx: [Int]) {
+        var idx = [0, 0]
+        var nextName = 0
+        var turns: [Turn] = []
+        for (i, plan) in plans.enumerated() {
+            let who = Self.roster[plan.team][idx[plan.team] % 3]
+            idx[plan.team] += 1
+            let guessed = (0..<plan.count).map { _ -> String in
+                defer { nextName += 1 }
+                return Self.names[nextName % Self.names.count]
+            }
+            let gone = left.contains(who.id)
+            turns.append(Turn(
+                id: Int64(i + 1), roomID: Self.roomID, round: plan.round, team: plan.team,
+                playerID: gone ? nil : who.id, playerName: gone ? "Former player" : who.name,
+                guessed: guessed, skipped: skip == .off ? 0 : i % 2,
+                endedAt: anchor - Self.turnLength * Double(plans.count - 1 - i)
+            ))
+        }
+        return (turns, idx)
+    }
+
+    // MARK: Playing
+
+    /// Round 1. Alex (team 0) guessed 3, Drew (team 1) guessed 2, now Blair (team 0, cursor 1) is up.
+    /// `running` false is the moment before Start Turn.
+    private func playing(skip: SkipMode, running: Bool, turnSkips: Int = 0) -> RoomSnapshot {
+        let (turns, idx) = history([TurnPlan(round: 1, team: 0, count: 3), TurnPlan(round: 1, team: 1, count: 2)], endingAt: now - 90, skip: skip)
+        let got = running ? 2 : 0
+        let created = now - 600
+        return snapshot(
+            room(
+                phase: .playing, round: 1, createdAt: created, settings: settings(skip: skip),
+                deadline: created + 60 + 120, currentTeam: 0, turnIdx: idx, turnPlayer: .blair,
+                turnEndsAt: running ? now + 38 : nil, turnGot: got, turnSkips: running ? turnSkips : 0,
+                pile: 18 - 5 - got, scores: [[3 + got, 2], [0, 0], [0, 0]]
+            ),
+            teamed(submitted: Set(Self.seats.keys)) + [player(.gray, team: nil, role: .spectator)],
+            turns
+        )
+    }
+
+    /// Alex (team 0) and Blair (team 1) are left, plus spectator Gray. Alex took the first turn, so it is team 1's turn,
+    /// but a team needs two players and neither has them: `current_team` stays 1, `turn_player_id` is null.
+    private func stalled() -> RoomSnapshot {
+        let (turns, idx) = history([TurnPlan(round: 1, team: 0, count: 2)], endingAt: now - 40, skip: .off)
+        let created = now - 600
+        return snapshot(
+            room(
+                phase: .playing, round: 1, createdAt: created, settings: settings(), deadline: created + 180,
+                currentTeam: 1, turnIdx: idx, pile: 16, scores: [[2, 0], [0, 0], [0, 0]]
+            ),
+            [player(.alex, team: 0, submitted: true), player(.blair, team: 1, submitted: true), player(.gray, team: nil, role: .spectator)],
+            turns
+        )
+    }
+
+    /// `assign_spectator(gray, 1)`: Gray becomes a team 1 player (not yet submitted), team 1 can play again, and the
+    /// rotation points at Blair, the first of team 1 by seat. The cursor is unchanged because Gray sits after it.
+    private func stalledAfterAssignment() -> RoomSnapshot {
+        var snap = stalled()
+        snap.players = snap.players.map { p in
+            guard p.userID == SampleCast.gray.id else { return p }
+            var moved = p
+            moved.role = .player
+            moved.team = 1
+            moved.submitted = false
+            return moved
+        }
+        snap.room.turnPlayerID = SampleCast.blair.id
+        return snap
+    }
+
+    // MARK: Round end and finished
+
+    private func roundEnd() -> RoomSnapshot {
+        let (turns, idx) = history(plans(rounds: [[10, 8]]), endingAt: now - 30, skip: .onePerTurn)
+        return snapshot(
+            room(
+                phase: .roundEnd, round: 1, createdAt: now - 1500, settings: settings(skip: .onePerTurn),
+                deadline: now - 1500 + 180, turnIdx: idx, scores: [[10, 8], [0, 0], [0, 0]]
+            ),
+            teamed(submitted: Set(Self.seats.keys)) + [player(.gray, team: nil, role: .spectator)],
+            turns
+        )
+    }
+
+    /// Three full rounds. With `frankieLeft`, Frankie left after the game and deleted their data: their turns show as
+    /// "Former player" with no player id, they are gone from `players` (other seats keep their numbers), and team 1's
+    /// cursor was reduced modulo the smaller roster as `kick_player` does.
+    private func finished(rounds: [[Int]], frankieLeft: Bool) -> RoomSnapshot {
+        let gone: Set<UUID> = frankieLeft ? [SampleCast.frankie.id] : []
+        let (turns, idx) = history(plans(rounds: rounds), endingAt: now - 30, skip: .onePerTurn, left: gone)
+        var players = teamed(submitted: Set(Self.seats.keys)) + [player(.gray, team: nil, role: .spectator)]
+        var cursor = idx
+        if frankieLeft {
+            players.removeAll { gone.contains($0.userID) }
+            cursor[1] = (idx[1] % 3) % 2
+        }
+        return snapshot(
+            room(
+                phase: .finished, round: 3, createdAt: now - 3000, settings: settings(skip: .onePerTurn),
+                deadline: now - 3000 + 180, turnIdx: cursor, scores: rounds, finishedAt: now - 30
+            ),
+            players,
+            turns
+        )
     }
 }
