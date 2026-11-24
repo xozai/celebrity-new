@@ -154,10 +154,13 @@ Packages/
       RoomSnapshot.swift, RoomEvent.swift, RoomEventDeriver.swift, Screen.swift,
       Validation.swift, RoundRules.swift
     Tests/CelebrityCoreTests/
-  CelebrityBackend/                 depends on CelebrityCore + supabase-swift
-    Sources/CelebrityBackend/GameBackend.swift, SupabaseGameBackend.swift,
-      FakeGameBackend.swift, BackendError.swift
-    Tests/CelebrityBackendTests/    integration tests against local Supabase
+  CelebrityBackend/                 one package, two library products
+    Sources/CelebrityBackend/       depends only on CelebrityCore
+      GameBackend.swift, BackendTypes.swift, BackendError.swift,
+      TeamAssignments.swift, FakeGameBackend.swift, SampleScenario.swift
+    Sources/CelebrityBackendSupabase/  adapter, the only product linking supabase-swift
+    Tests/CelebrityBackendTests/    interface, fake and fixture tests
+    Tests/CelebrityBackendSupabaseTests/  adapter tests, including local Supabase integration
 supabase/
   config.toml
   migrations/0001_schema.sql, 0002_rls.sql, 0003_rooms.sql, 0004_lobby.sql,
@@ -367,55 +370,80 @@ Verify each with `swift test --package-path Packages/CelebrityCore`.
 
 ### Phase 3: CelebrityBackend
 
-**Task 3.1: Protocol** - `GameBackend` with one async method per app RPC, including token arguments for Got It and Skip and a private draw result carrying `id`, `name` and `token`, plus `func updates(roomID:) -> AsyncStream<RoomSnapshot>` and `var connection: AsyncStream<ConnectionState>`. `BackendError` maps the domain codes in section 6 to user-facing messages. Provide a way for the app to observe a terminal `not_member` result from a refresh even though the snapshot stream carries only successful snapshots.
+**Task 3.1: Protocol** - Done. `GameBackend` is `Sendable` and exposes one async method per app RPC, `currentUserID()` for anonymous session identity, and the room observation, connection and foreground APIs below.
 
-**Task 3.2: Fake** - `FakeGameBackend`, scriptable, for previews and UI tests. It replays canned snapshots and does not reimplement the rules.
+**Task 3.2: Fake** - Done. `FakeGameBackend` records calls and replays scripted snapshots, draws and recommendation results for previews and tests. Script delays and failures, including room-scoped refresh failures, refused channel joins and losses during local membership changes, without reimplementing the game rules. Use `script(_:transitions:)` to set or clear a private draw in the same commit as a snapshot, or `script(_:followUpOf:)` to replay a fixture's next step and any paired draw.
 
-**Task 3.3: Supabase implementation, calls** - anonymous sign-in on first launch (session stored in the Keychain by the SDK), then one RPC wrapper per app function using the argument keys in section 6. Decode snapshots with `RoomSnapshot.makeDecoder()`. Decode the nullable draw objects separately and `heartbeat` as a timestamp scalar.
+- `observeRoom(roomID:) -> AsyncStream<RoomUpdate>` delivers `.snapshot(RoomSnapshot)` and, when the room observation ends, exactly one terminal `.lost(RoomLossReason)` followed by stream completion. Cancellation ends the stream without a loss. Before starting the consuming task, obtain the stream so it is registered. Use one consuming task per returned stream and cancel it on teardown. Room and connection streams keep only the newest undelivered element, so terminal loss can replace a pending snapshot and is buffered even if it occurs before the consumer's first read. Void RPCs return no state. Read the result from the observation.
+- Refresh failures, including the first refresh and foreground refresh, have four paths. Retry network failures and report only `.reconnecting` on `connection`. Map `not_member` to `.removed` (including a stale stored room ID) or `.roomDeleted` if a deletion event was seen first. For an invalid or deleted session, try token recovery once and emit `.sessionEnded` if it fails. Other permanent failures, such as denied permission or an undecodable response, emit `.failed(BackendError)`. A local leave or switch ends the old observation with `.left`, and data deletion or sign-out ends it with `.sessionEnded`. One refresh outcome applies to all observers of that room.
+- `connection: AsyncStream<ConnectionState>` starts with the current state and describes the live room channel. States are `.idle` with no room observed, `.connecting` during the first join, `.connected`, `.reconnecting` while retrying and `.disconnected` when the observed room's channel is down without an active retry. Show the reconnecting banner only when `showsReconnectingBanner` is true (`.reconnecting` or `.disconnected`). `didEnterForeground() async` refreshes Realtime auth, reconnects as needed and refetches on the existing streams. It does not throw and has no effect without an observed room.
+- `BackendError` maps section 6 domain codes to `userMessage`. Use `from(postgrestBody:httpStatus:)` or `from(code:message:httpStatus:)` for structured server errors. Domain tokens are the exact message under `P0001`. PostgREST JWT errors (`PGRST301/302/303`) and HTTP 401 map to `.notAuthenticated`; `42501` with HTTP 403 or unavailable status maps to `.permissionDenied`. HTTP 502/503/504 map to `.network`. Use `from(_:)` for generic errors and ignore cancellation with `BackendError.isCancellation(_:)`.
+- `TeamAssignments` is keyed by `Player.userID`. Use `.team(0)`, `.team(1)` or `.unassigned` (JSON null). Omitted users keep their assignments. `SettingsUpdate` sends only supplied fields using the section 6 wire keys. The private `Draw` carries the slip `id`, `name` and current draw `token`. Both recommendation methods return `[CelebritySuggestion]` with name, description, category and sources. The protocol and fake halves of Task 3.4b are done.
+- `SampleScenario.ID` cases: `lobbyHost`, `lobbyGuest`, `lobbyUnevenHost`; `submittingEditing`, `submittingWaiting`, `submittingSpectator`, `submittingRecommendationsOff`, `submittingExpiredEmpty`; `playingClueGiverReady`, `playingClueGiver`, `playingClueGiverSkipOff`, `playingClueGiverSkipUsed`, `playingClueGiverUnlimited`, `playingGuesser`, `playingOpponent`, `playingSpectator`; `stalledHost`, `stalledGuest`; `roundEndHost`, `roundEndGuest`, `finishedWinner`, `finishedTie`. Follow-ups cover Start Turn (first draw, no score change), spectator assignment in a stalled room, and an expired empty window returning to Lobby.
 
-**Task 3.4: Supabase implementation, live updates** - call Realtime `setAuth` before joining the private `room:<room_id>` Broadcast channel. Listen to all four events in section 6, coalesce bursts and refetch `get_snapshot` on any event, reconnect and foregrounding. Cancel the old subscription on room or session changes. Surface `not_member` as removal for the current room and close its channel.
+**Task 3.3: Supabase implementation, calls** - implement the RPC adapter in `CelebrityBackendSupabase`. The `CelebrityBackend` product depends only on CelebrityCore and holds the protocol, types, fake and samples. The adapter product is in the same package and is the only library product linking the SDK.
 
-**Task 3.4b: Recommendation calls** - add `suggestCelebrities(query:)` and `randomCelebrities(count:excluding:)` to `GameBackend`, returning `[CelebritySuggestion]` (name, description, category, sources), with Supabase and fake implementations.
+1. Sign in anonymously on first launch when no session exists. Use the SDK's Keychain session storage. Wrap the app RPCs using the argument keys in section 6, with recommendation wrappers tracked in Task 3.4b.
+2. Map typed SDK Auth errors in the adapter, with tests. Local `sessionMissing` without an HTTP response, API `session_not_found`, `refresh_token_not_found`, `bad_jwt` and other invalid-session codes, and a rejected refresh map to `.notAuthenticated`. Use those codes without relying on HTTP 401. Nested `CancellationError` and `URLError.cancelled` map to `.cancelled`. Genuine configuration failures such as a bad URL/key or disabled provider map to `.unknown`. Network errors map to `.network`.
+3. Pass the PostgREST response body and HTTP status to `BackendError.from(postgrestBody:httpStatus:)`, or pass the extracted code, message and status to `from(code:message:httpStatus:)`. Preserve the distinction between `42501` with HTTP 401 and with HTTP 403.
+4. Decode snapshots with `RoomSnapshot.makeDecoder()`. Decode the nullable draw as a top-level JSON object or null and `heartbeat` as a timestamp scalar using the snapshot date strategy. The interface tests include fixtures for null draws and the standalone timestamp.
+5. Send `TeamAssignments.wireJSON()` as the JSON object inside `p_assignments` and encode `SettingsUpdate` inside `p_settings`.
+6. After `deleteMyData()`, clear the local session if the anonymous account was deleted. Keep the login for a retained account.
+7. When Task 3.3 lands, add the `CelebrityBackendSupabase` product to the app target's `CelebrityBackend` package dependencies in `project.yml`, alongside the existing interface product.
 
-**Task 3.5: Integration tests** - port the 45 cases from the reference `test/integration.js` to Swift Testing, driving four signed-in clients against local Supabase. Exercise stale draw tokens, clue-giver-only draw access, and removal detected by snapshot refresh. Verify: `supabase start && swift test --package-path Packages/CelebrityBackend`.
+**Task 3.4: Supabase implementation, live updates** - implement the observation and foreground contract in `CelebrityBackendSupabase`.
+
+1. Probe membership with `get_snapshot` even when private channel authorisation refuses the join. If the probe finds no seat, end with `lost(.removed)`. If the probe finds a seat, deliver the snapshot, show `.reconnecting` and retry the join.
+2. Fetch again after a successful join whenever a snapshot was fetched before joining.
+3. Defer `.removed` and `.roomDeleted` classification while a local leave, room switch or deletion is in flight. On success, end with `.left` or `.sessionEnded` and discard the deferred classification. On failure, apply the deferred classification.
+4. Share one channel per active room and session across observers. Keep invalidations received during an initial or later fetch and fetch again afterwards. Check the generation of every fetch, membership probe, publication and loss. Drop results from before a reconnect, leave, delete, loss, room switch or session replacement.
+5. Apply the same failure classes on the first and later refreshes. Network failure retries and signals only `.reconnecting`. For an invalid session, attempt token recovery once and emit `lost(.sessionEnded)` if it fails. Other permanent failures emit `lost(.failed(error))`. `not_member` emits `lost(.removed)` or `lost(.roomDeleted)` if a deletion event was seen first.
+6. Publish `.idle` with no observation, `.connecting` on the initial join, `.connected` on success and `.reconnecting` or `.disconnected` when the channel drops. Return to `.idle` after loss, leave, delete or cancellation by the last observer if no room remains observed.
+7. Buffer the newest undelivered element per room or connection subscriber. Deliver one terminal loss to each active room observer, then finish, with no later snapshots. Cancelling an observer finishes its stream without a loss and leaves other observers running. Close the channel once when the last observer finishes.
+8. On `didEnterForeground()`, refresh Realtime auth, reconnect if needed, and refetch and publish on the existing observation streams. With no room observed, do nothing.
+9. Call Realtime `setAuth` with the session token before joining private Broadcast on `room:<room_id>` with a lowercase UUID. Listen for all four section 6 events, coalesce bursts and refetch on every event type, reconnect and foregrounding.
+
+**Task 3.4b: Recommendation calls** - implement `suggestCelebrities(query:limit:)` and `randomCelebrities(count:excluding:)` in `CelebrityBackendSupabase`. Use section 6's `q`/`max` and `n`/`exclude` keys and decode the returned rows as `[CelebritySuggestion]`.
+
+**Task 3.5: Integration tests** - port the 45 cases from the reference `test/integration.js` to Swift Testing in `CelebrityBackendSupabaseTests`, driving four signed-in clients against local Supabase. Exercise stale draw tokens, clue-giver-only draw access, removal detected by snapshot refresh, and the join, catch-up and local membership orderings in Task 3.4. Verify: `supabase start && swift test --package-path Packages/CelebrityBackend`.
 
 ### Phase 4: App screens
 
-Every view gets previews built on `FakeGameBackend`. Verify each task by building and by checking the preview states listed.
+Build previews and UI tests with `FakeGameBackend` and the applicable `SampleScenario` fixtures. Use scripted follow-ups and failures for transitions. Verify each task by building and by checking the preview states listed.
 
-**Task 4.1: AppModel and routing** - `@Observable AppModel` holding the snapshot, connection state and pending recap events; root view switches on `Screen`. Unit tests with the fake.
+**Task 4.1: AppModel and routing** - `@MainActor @Observable AppModel` holds the caller's user ID, snapshot, connection state and pending recap events. Get the ID from `currentUserID()` at launch. Route the root view using `Screen`. Create one `observeRoom(roomID:)` stream for the active room and consume it in one task. Cancel the old task on room change or teardown, and ignore results from superseded observations. Keep one task for `connection`. Derive recaps from delivered snapshots and their turn history, allowing intermediate snapshots to be coalesced. Handle each terminal reason as in Task 5.5, including a loss before any snapshot. Unit tests with the fake.
 
-**Task 4.2: Home** - name field (remembered), Create, Join with a 4-character code field, How to Play, connection status. Previews: empty, connecting, error.
+**Task 4.2: Home** - name field (remembered), Create and Join using the returned room snapshot and a 4-character code field for Join, How to Play, and pending/error states for room requests. The live room connection stream is idle on Home, so use request state for the Home connecting preview. Previews: empty, connecting, error.
 
-**Task 4.3: Lobby** - player list, team editor (tap to move, shuffle, auto-balance), team names, host settings sheet including skip mode, invite sheet (code, QR, share), start button with the disabled reason. Previews: host, guest, uneven teams.
+**Task 4.3: Lobby** - player list, team editor (tap to move, shuffle, auto-balance) using `TeamAssignments` keyed by `Player.userID`, team names, host settings sheet sending a partial `SettingsUpdate` including skip mode, invite sheet (code, QR, share), start button with the disabled reason. Previews: host, guest, uneven teams.
 
-**Task 4.4: Submit** - one field per slip, countdown, submitted-count progress, retract. Disable edits at the deadline. Route an empty expired window back to Lobby from the refetched snapshot. Previews: editing, waiting, spectator.
+**Task 4.4: Submit** - one field per slip, countdown, submitted-count progress, and submit/retract via `submitSlips(_:)` and `retractSlips()`. Disable edits at the deadline. Route an empty expired window back to Lobby from the observed snapshot. Previews: editing, waiting, spectator, and the expired-empty follow-up.
 
 **Task 4.4b: Wikipedia live search** - `WikipediaSearch.swift`: build the request, decode, drop disambiguation pages. Unit tests with a stubbed `URLProtocol`: normal response, empty response, timeout, malformed JSON.
 
-**Task 4.4c: NameSuggester** - `@Observable` class that debounces input, asks the backend first, tops up from Wikipedia when there are fewer than 6, removes duplicates by normalised name, and cancels stale requests. Unit tests: curated results come first; duplicates collapse; a slow earlier query never overwrites a newer one; Wikipedia failure still shows curated results; nothing is requested when the room has recommendations off.
+**Task 4.4c: NameSuggester** - `@Observable` class that debounces input, asks `suggestCelebrities(query:)` first, tops up from Wikipedia when there are fewer than 6, removes duplicates by normalised name, and cancels stale requests without showing a cancellation error. Unit tests: curated results come first; duplicates collapse; a slow earlier query never overwrites a newer one; Wikipedia failure still shows curated results; nothing is requested when the room has recommendations off.
 
-**Task 4.4d: Suggestion list and ideas row** - `SlipField.swift` shows up to 6 suggestions with descriptions under the focused field; `IdeasRow.swift` shows 8 chips and a shuffle button, fills the next empty slip on tap, and excludes names already entered. Both are hidden when the host has turned recommendations off. Add the toggle to the host settings sheet from Task 4.3. Previews: suggestions showing, ideas row, recommendations off. VoiceOver reads name then description.
+**Task 4.4d: Suggestion list and ideas row** - `SlipField.swift` shows up to 6 suggestions with descriptions under the focused field; `IdeasRow.swift` shows 8 chips and a shuffle button, fills the next empty slip on tap, and excludes names already entered with `randomCelebrities(count:excluding:)`. Both are hidden when the host has turned recommendations off. Add the toggle to the host settings sheet from Task 4.3. Previews: suggestions showing, ideas row, recommendations off. VoiceOver reads name then description.
 
-**Task 4.5: Game, clue-giver** - Start Turn, slip card, Got It, Skip (hidden, limited or free per setting), timer ring. Send the displayed draw token with Got It and Skip, and replace the displayed draw with the RPC result, including its token. A stale-token reply resynchronises the displayed draw. Clear it when the turn ends, the player loses the clue-giver role, or the room changes. Keep the draw out of shared snapshots and recap state. Previews for each skip mode.
+**Task 4.5: Game, clue-giver** - Start Turn, slip card, Got It, Skip (hidden, limited or free per setting), timer ring. Store the private `Draw?` from `startTurn()`. Pass the displayed `draw.token` to `gotIt(token:)` and `skip(token:)`, and replace the whole draw with the result, including a stale-token reply or nil. Apply replies only to the room and turn that requested them. Clear the draw on turn end, loss of the clue-giver role, room switch or any terminal loss. Keep it out of shared snapshots and recap state. Previews: ready to start and running with Skip off, available, used, or unlimited.
 
-**Task 4.6: Game, watcher** - who is giving clues, "your team is guessing" or "stay quiet", timer, slips left, live count, round rule banner, scoreboard. During `playing`, a nil `nextUp` means there is no assigned clue-giver. Show the host an "assign a spectator" state with the team assignment action, and tell other players they are waiting for the host. Previews: guesser, opponent, spectator, stalled room.
+**Task 4.6: Game, watcher** - who is giving clues, "your team is guessing" or "stay quiet", timer, slips left, live count, round rule banner, scoreboard. During `playing`, a nil `nextUp` means there is no assigned clue-giver. Show the host an "assign a spectator" state with `assignSpectator(userID:team:)`, and tell other players they are waiting for the host. Previews: guesser, opponent, spectator, stalled host and stalled guest. Use the stalled follow-up to check that assigning the spectator restores `nextUp`.
 
-**Task 4.7: Recap sheets** - round intro, turn recap, round end with host-only Next Round, game end with winner or tie, history, share, Play Again for the host. Show skip counts and use the saved display name for anonymised turns.
+**Task 4.7: Recap sheets** - round intro, turn recap, round end with host-only Next Round (`startNextRound()`), game end with winner or tie, history, share, and Play Again for the host (`resetRoom()`). Use snapshot-derived events and turn history for recaps. Show skip counts and use the saved display name for anonymised turns.
 
-**Task 4.8: How to Play and app settings** - rules text based on the Coyier write-up, theme, sound toggle, delete my data, privacy policy link, version. After a successful data deletion, clear the stored room and local game state. Clear the local anonymous session when its account was deleted. A retained account keeps its login.
+**Task 4.8: How to Play and app settings** - rules text based on the Coyier write-up, theme, sound toggle, delete my data, privacy policy link, version. Call `deleteMyData()`. On success, clear the stored room and local game state, and treat `.sessionEnded` as expected. The backend clears the local session when it deletes the anonymous account. Call `currentUserID()` again to obtain the fresh anonymous identity or the retained account's ID.
 
 ### Phase 5: Resilience
 
-**Task 5.1: Server clock** - `ServerClock` stores the offset from `server_now`; the timer renders from `turn_ends_at` minus corrected now. Unit test with a 90-second skew.
+**Task 5.1: Server clock** - `ServerClock` stores the offset from snapshot `server_now` or the timestamp returned by `heartbeat(roomID:)`; the timer renders from `turn_ends_at` minus corrected now. Unit test with a 90-second skew.
 
-**Task 5.2: Deadline calls** - when the countdown hits zero call `end_turn()` (or `close_submissions()`), and refetch. The server uses its own clock at the deadline. Treat a close that returns `wrong_phase` after an empty window returned to the lobby as benign. If the server says `deadline_not_reached`, refresh the clock and wait for the deadline.
+**Task 5.2: Deadline calls** - when the countdown hits zero call `endTurn()` (or `closeSubmissions()`) and refetch with `snapshot(roomID:)`. The server uses its own clock at the deadline. Treat a close that returns `wrong_phase` after an empty window returned to the lobby as benign. If the server says `deadline_not_reached`, refresh the clock and wait for the deadline.
 
-**Task 5.3: Lifecycle** - on `scenePhase == .active`, refresh Realtime auth, reconnect the private Broadcast channel and refetch. The active clue-giver calls `current_slip()` to restore both the slip and its current draw token. Persist the room id for auto-rejoin after relaunch. Non-blocking reconnecting banner.
+**Task 5.3: Lifecycle** - call `await backend.didEnterForeground()` when SwiftUI's `scenePhase` becomes `.active`. The backend refreshes Realtime auth, reconnects and refetches on the existing streams. Afterwards, if still the active clue-giver for the same room and turn, use `currentSlip()` to restore or clear the private `Draw`. Persist the room ID and start auto-rejoin with `observeRoom(roomID:)` after relaunch. Exit loading on the first snapshot or any terminal loss, including `.failed(error)`. Show a non-blocking reconnecting banner only when `connectionState.showsReconnectingBanner` is true.
 
-**Task 5.4: Presence and host handoff** - `heartbeat` every 15 s; grey out players stale for 30 s; the lowest-seat connected player calls `claim_host()` when the host is stale for 45 s.
+**Task 5.4: Presence and host handoff** - `heartbeat(roomID:)` every 15 s; grey out players stale for 30 s; the lowest-seat connected player calls `claimHost()` when the host is stale for 45 s.
 
-**Task 5.5: Kicked and room-gone handling** - after a Broadcast or lifecycle refresh, treat `get_snapshot` returning `not_member` for the joined room as loss of the seat. Use a known `room_deleted` event to distinguish a closed room where possible. Alert, cancel the subscription, return to Home and clear the stored room and draw.
+**Task 5.5: Kicked and room-gone handling** - handle the final `.lost(reason)` from room observation, even if no snapshot arrived. Stop using that observation and clear its stored room, local game state and private draw. For `.removed`, alert and return Home. For `.roomDeleted`, return Home and explain that the room closed. For `.left`, end the old room quietly and preserve any replacement room. For `.sessionEnded`, clear the room and cached identity, alert on unexpected session loss, and reacquire identity with `currentUserID()` when needed. For `.failed(error)`, leave the loading state, return Home and show `error.userMessage`. Ignore cancellation.
 
 ### Phase 6: Polish
 
@@ -428,7 +456,7 @@ Every view gets previews built on `FakeGameBackend`. Verify each task by buildin
 
 ### Phase 7: End-to-end verification
 
-**Task 7.1: UI tests** - with the fake backend: create room, submit, a clue-giver turn, game end.
+**Task 7.1: UI tests** - with `FakeGameBackend` and `SampleScenario` fixtures and scripted follow-ups: create room, submit, a clue-giver turn, game end.
 **Task 7.2: Hosted dev project** - the project exists and is migrated (see Carried forward). Remaining: point a debug build at it.
 **Task 7.3: Multi-device run** - four simulators or devices through a full three-round game, following an updated copy of the reference `test/qa-plan.md` saved as `docs/qa-plan.md`. Include: kill and relaunch the clue-giver mid-turn, airplane-mode a guesser, host leaves, kick, late joiner, rematch.
 
@@ -489,10 +517,12 @@ Each worker gets its own git worktree (`herdr worktree create --cwd "$REPO" --br
 |---|---|---|---|
 | 1. Serial | Phase 0 on main | waits | waits |
 | 2. Parallel | Phase 1, `supabase/` | Phase 2, `Packages/CelebrityCore` | Phase 1b, `tools/celebrity-list`, then static files in `site/` |
-| 3. Parallel | Tasks 3.1 and 3.2 first, then the rest of Phase 3 | Phase 4 screens, once 3.1 and 3.2 are merged | Quota exhausted until about 29 November 2026 |
+| 3. Parallel | Tasks 3.3 to 3.5, `Packages/CelebrityBackend` (Supabase target and its tests only) | Phase 4, `App/` | Quota exhausted until about 29 November 2026 |
 | 4. Parallel | Phase 5 | Phase 6 | cross-reviews |
 
-- Assign Antigravity's stage 3 lane (Task 4.4b and `docs/qa-plan.md`) to Codex or Claude.
+- Task 4.4b is part of Codex's Phase 4 lane. Assign `docs/qa-plan.md` separately.
+- The `CelebrityBackend` interface target is frozen for stage 3. Route changes to it through the lead.
+- CI runs the Swift tests for both packages: `swift test --package-path Packages/CelebrityCore` and `swift test --package-path Packages/CelebrityBackend`. The macOS job has no Supabase stack, so integration tests that need one must skip themselves when it is absent. The lead owns workflow changes.
 - Claude owns all database work, because only one local Supabase stack can run at a time.
 - Codex runs with `-s workspace-write` and does not commit; the lead commits its lane after review.
 - Phases 7.3, 8 and 9 stay with the user (real devices, App Store Connect, Render).

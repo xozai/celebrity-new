@@ -14,11 +14,12 @@ concurrency:
 
 jobs:
   core:
-    name: CelebrityCore tests
+    name: Swift package tests
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - run: swift test --package-path Packages/CelebrityCore
+      - run: swift test --package-path Packages/CelebrityBackend
 
   database:
     name: Database tests
