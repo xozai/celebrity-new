@@ -59,26 +59,55 @@ public protocol GameBackend: Sendable {
     /// merely breaking out of the loop while still holding the stream is not a guaranteed unsubscribe. For another
     /// consumer, call `observeRoom` again.
     ///
-    /// ### When the observation ends
-    /// - **Initial refresh fails with `not_member`** (for example a stale persisted room id): the stream yields
-    ///   `lost(.removed)` and finishes. This is delivered even though no snapshot ever arrived, and even if the
-    ///   failure happens before the consumer starts iterating. A later `observeRoom` for the same room starts a new,
-    ///   independent attempt.
-    /// - **Initial refresh fails otherwise** (network): no element is yielded yet; the stream stays open, the
-    ///   ``connection`` becomes `.reconnecting`, and the backend retries.
-    /// - **A later refresh fails with `not_member`**: `lost(.removed)`, or `lost(.roomDeleted)` if a `room_deleted`
-    ///   event was seen first. The channel is closed.
+    /// ### When the observation ends, and failures of a refresh
+    /// Refresh failures (the first one and every later one, including ``didEnterForeground()``) are classified:
+    /// - **Network failure**: retried by the backend. The observation stays open, nothing is yielded, and the only signal
+    ///   is ``connection`` (`.reconnecting`). It never ends the observation.
+    /// - **`not_member`**: `lost(.removed)`, or `lost(.roomDeleted)` if a `room_deleted` event was seen first. This is also
+    ///   what a stale persisted room id produces on the first refresh, delivered even though no snapshot ever arrived and
+    ///   even if it happens before the consumer starts iterating. A later `observeRoom` for the same room starts a new,
+    ///   independent attempt. One refresh outcome applies to every observer of the room, never just the newest.
+    /// - **Invalid or deleted session** (`not_authenticated`, JWT errors): one recovery attempt (refresh the token); if it
+    ///   fails, `lost(.sessionEnded)`. The app then clears its session and rooms and may sign in again.
+    /// - **Any other permanent failure** (permission denied, an undecodable response, an unknown error):
+    ///   `lost(.failed(error))`, so an auto-rejoin that is showing a loading state can leave it and show the error.
     /// - **Leave** (``leaveRoom()``) and **room switch** (``createRoom(name:)`` or ``joinRoom(code:name:)`` into a
     ///   different room): observers of the old room get `lost(.left)`.
     /// - **Session replacement** (``deleteMyData()``, sign-out): observers get `lost(.sessionEnded)`.
     /// - **Cancellation**: the stream finishes without a `lost`.
     ///
-    /// After any `lost`, room-bound private state (the clue-giver's current ``Draw``) must be discarded.
+    /// After any `lost`, room-bound private state (the clue-giver's current ``Draw``) must be discarded, and
+    /// ``connection`` is `.idle` unless another room is still observed.
+    ///
+    /// ## Requirements on any live implementation (Task 3.4)
+    /// These decide which terminal reason a screen sees, so the Supabase implementation must satisfy them and the fake
+    /// can script both orderings (``FakeGameBackend/refuseChannelJoin(_:)``, delayed local calls with
+    /// ``FakeGameBackend/simulateRoomLoss(_:roomID:)``):
+    /// 1. **Membership probe even when the join is refused.** A kicked client or a stale persisted room fails private
+    ///    Broadcast authorisation before it can join. The implementation must still call `get_snapshot` to learn
+    ///    `not_member` (and end with `lost(.removed)`); it must not wait for a successful join before fetching, or it would
+    ///    retry forever. If the probe succeeds but the join is refused, deliver the snapshot, show `.reconnecting` and retry.
+    /// 2. **Catch-up fetch after a successful join** whenever a snapshot was fetched before joining, so a change committed
+    ///    between that fetch and the join is not missed.
+    /// 3. **Defer terminal classification during local membership changes.** While a local `leave_room`, room switch
+    ///    (`create_room`/`join_room`) or `delete_my_data` is in flight, a refresh or event that would classify as
+    ///    `removed` or `roomDeleted` must wait for the RPC's outcome. If the RPC succeeds, the observation ends with the
+    ///    local reason (`left` or `sessionEnded`) and the remote classification is discarded; if it fails, the deferred
+    ///    classification then applies.
+    /// 4. **One channel per active room and session**, shared by all observers (see Ownership), with a generation check on
+    ///    every fetch, probe, script-free commit and loss, so results of an operation started before a leave, delete, loss
+    ///    or room switch are dropped.
     /// - Parameter roomID: The room to follow.
     func observeRoom(roomID: UUID) -> AsyncStream<RoomUpdate>
 
-    /// The live connection state. Each access returns an independent stream that first yields the current state and then
-    /// changes, keeping only the newest undelivered value. One consumer per stream, as for ``observeRoom(roomID:)``.
+    /// The state of the **live room channel**, not general network reachability. Each access returns an independent stream
+    /// that first yields the current state and then changes, keeping only the newest undelivered value. One consumer per
+    /// stream, as for ``observeRoom(roomID:)``.
+    ///
+    /// It is `.idle` when no room is observed: before any observation, after a loss, leave or delete, and after the last
+    /// observer cancels. With a room observed it is `.connecting` (first join), `.connected`, `.reconnecting` (dropped or a
+    /// refresh hit the network; retrying) or `.disconnected`. Show the reconnecting banner only when
+    /// ``ConnectionState/showsReconnectingBanner`` is true. A Home screen should not show "connected" from this stream.
     var connection: AsyncStream<ConnectionState> { get }
 
     /// Tells the backend the app became active (call it when `scenePhase` becomes `.active`).

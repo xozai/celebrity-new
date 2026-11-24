@@ -26,19 +26,29 @@ public struct Draw: Codable, Sendable, Equatable, Hashable, Identifiable {
     }
 }
 
-/// The state of the backend's live connection, published on ``GameBackend/connection``.
+/// The state of the live room channel, published on ``GameBackend/connection``.
+///
+/// It describes **the live channel of the room being observed**, not general reachability. Without an observed room the
+/// state is ``idle``, whatever the network is doing. Screens show a "reconnecting" banner only when
+/// ``showsReconnectingBanner`` is true (``reconnecting`` or ``disconnected``); ``idle`` and ``connecting`` show nothing.
 public enum ConnectionState: Sendable, Equatable {
-    /// The first connection is being made.
+    /// No room is being observed. This is the state before any observation, after a loss, leave or delete, and after the
+    /// last observer cancels.
+    case idle
+    /// The first join of an observed room's channel is in progress.
     case connecting
-    /// The live channel is joined and snapshots are flowing.
+    /// The room's channel is joined and snapshots are flowing.
     case connected
-    /// The connection dropped and the backend is retrying. Show a non-blocking banner.
+    /// The channel dropped (or a refresh failed on the network) and the backend is retrying. Show a non-blocking banner.
     case reconnecting
-    /// No connection and none being attempted (for example before sign-in or after leaving).
+    /// A room is observed but its channel is down and the backend is not currently retrying. Show the banner.
     case disconnected
 
     /// True only for ``connected``.
     public var isConnected: Bool { self == .connected }
+
+    /// True for ``reconnecting`` and ``disconnected``: show the non-blocking reconnecting banner.
+    public var showsReconnectingBanner: Bool { self == .reconnecting || self == .disconnected }
 }
 
 /// Why a room observation ended. Delivered as the last element of ``GameBackend/observeRoom(roomID:)``.
@@ -54,7 +64,12 @@ public enum RoomLossReason: Sendable, Equatable {
     case left
     /// The session ended under the observation: ``GameBackend/deleteMyData()`` or a sign-out or session replacement.
     /// Expected when the app caused it; otherwise treat like ``removed``.
+    /// Also the outcome when the session is invalid or deleted and one recovery attempt (token refresh, then a fresh
+    /// anonymous sign-in is the app's job) failed.
     case sessionEnded
+    /// A refresh failed permanently and retrying cannot help (permission denied, an undecodable response, any other
+    /// non-network error). The observation is over; show the error and leave the room's loading state.
+    case failed(BackendError)
 }
 
 /// One element of a room observation (``GameBackend/observeRoom(roomID:)``).
@@ -63,6 +78,33 @@ public enum RoomUpdate: Sendable, Equatable {
     case snapshot(RoomSnapshot)
     /// The observation is over for this reason. It is always the last element; the stream finishes after it.
     case lost(RoomLossReason)
+}
+
+/// How a scripted transition changes the clue-giver's private draw, in the same commit as its snapshot.
+public enum DrawUpdate: Sendable, Equatable {
+    /// Leave the draw as it is (for a drawing call, take the next one from the draw queue).
+    case unchanged
+    /// The private draw is gone (turn ended, role lost, round over).
+    case clear
+    /// This is now the private draw (and the result of a drawing call such as Start Turn).
+    case set(Draw)
+}
+
+/// One scripted server step for ``FakeGameBackend/script(_:transitions:)``: a snapshot and what happens to the private draw.
+public struct ScriptedTransition: Sendable, Equatable {
+    /// The snapshot that becomes current.
+    public var snapshot: RoomSnapshot
+    /// The change to the private draw, committed together with the snapshot.
+    public var draw: DrawUpdate
+
+    /// Creates a transition.
+    /// - Parameters:
+    ///   - snapshot: The new state.
+    ///   - draw: The draw change. Defaults to unchanged.
+    public init(snapshot: RoomSnapshot, draw: DrawUpdate = .unchanged) {
+        self.snapshot = snapshot
+        self.draw = draw
+    }
 }
 
 /// A partial update for ``GameBackend/updateSettings(_:)``. Only non-nil fields are sent.

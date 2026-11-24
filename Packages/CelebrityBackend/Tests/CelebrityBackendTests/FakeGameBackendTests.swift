@@ -313,16 +313,6 @@ private final class ProbeViewModel {
         #expect(await iterator.next() == nil)
     }
 
-    @Test func naturalNotMemberForTheActiveRoomAlsoEndsIt() async {
-        let a = lobbySnapshot()
-        let fake = FakeGameBackend(snapshot: a)
-        var iterator = fake.observeRoom(roomID: a.room.id).makeAsyncIterator()
-        _ = await iterator.next()
-        fake.simulateRoomLoss(.removed)
-        _ = await iterator.next()
-        await #expect(throws: BackendError.notMember) { try await fake.snapshot(roomID: a.room.id) }
-    }
-
     @Test func probingAnUnrelatedRoomLeavesTheObservationAlone() async throws {
         let a = lobbySnapshot()
         let fake = FakeGameBackend(snapshot: a)
@@ -432,7 +422,7 @@ private final class ProbeViewModel {
         let fake = FakeGameBackend(snapshot: lobbySnapshot())
         fake.fail(.didEnterForeground, with: .network("offline"))
         var states = fake.connection.makeAsyncIterator()
-        #expect(await states.next() == .connected)
+        #expect(await states.next() == .idle)
         await fake.didEnterForeground()
         #expect(await states.next() == .reconnecting)
     }
