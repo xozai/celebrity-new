@@ -1,0 +1,7 @@
+{
+  "name": "celebrity-hosted-smoke",
+  "private": true,
+  "type": "module",
+  "scripts": { "smoke": "node smoke.mjs" },
+  "dependencies": { "@supabase/supabase-js": "^2" }
+}

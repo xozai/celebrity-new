@@ -1,9 +1,10 @@
 name: Refresh Celebrities
 
 on:
-  schedule:
-    # Run at 00:00 on the 1st day of every month
-    - cron: '0 0 1 * *'
+  # The monthly schedule is off until the Task 1b.4 live build has been checked and the
+  # PRODUCTION_DATABASE_URL secret is set. Restore it by uncommenting:
+  # schedule:
+  #   - cron: '0 0 1 * *'
   workflow_dispatch:
 
 permissions:

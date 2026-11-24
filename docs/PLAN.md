@@ -359,11 +359,11 @@ Verify each with `swift test --package-path Packages/CelebrityCore`.
 
 - Task 1b.4's live build, load and spot check have yet to run.
 - Replace the `TEAMID` and `APP_STORE_URL` placeholders in `site/` before release. Verify the IMDb credit wording.
-- On a hosted staging project, apply the migrations and test private Broadcast end to end. A member should receive all four events, and an outsider and a removed player attempting a new join should receive none.
-- Confirm that the hosted Realtime join authorisation probe passes with the policy's `topic = realtime.topic()` binding.
-- Confirm the hosted `realtime.send(jsonb, text, text, boolean)` signature. The wrapper tolerates a missing signature, which leaves the app without delivery.
-- Check query plans for `rooms`, `players` and `turns` under the hosted REST role with realistic history sizes. Confirm that the migration owner's definer functions can read `auth.users`.
-- Put every database change from here on in a new forward migration. Use `supabase/tests/concurrency/run.sh` for the two-session checks.
+- Hosted dev project `celebrity-dev` (ref `mrfjxgunecbjzmfkacvu`, us-east-2) exists with all 11 migrations applied and anonymous sign-ins on. It is the Task 7.2 project. Checked there: private Broadcast end to end (`supabase/tests/hosted/smoke.mjs`), the join authorisation probe with the `topic = realtime.topic()` binding, the `realtime.send(jsonb, text, text, boolean)` signature, the extensions, the cleanup schedule, and definer functions reading `auth.users`.
+- Accepted: a removed player's open socket keeps receiving invalidations (room id and event name only) until it reauthorises. Topics are not rotated.
+- Still open on hosted: query plans for `rooms`, `players` and `turns` under the REST role with realistic history sizes. The first channel join on the new project was refused once and has not recurred.
+- The monthly schedule in `refresh-celebrities.yml` is commented out until the live build is checked and the `PRODUCTION_DATABASE_URL` secret is set.
+- Put every database change from here on in a new forward migration. `supabase/tests/concurrency/run.sh` covers the two-session checks and runs in CI.
 
 ### Phase 3: CelebrityBackend
 
@@ -429,7 +429,7 @@ Every view gets previews built on `FakeGameBackend`. Verify each task by buildin
 ### Phase 7: End-to-end verification
 
 **Task 7.1: UI tests** - with the fake backend: create room, submit, a clue-giver turn, game end.
-**Task 7.2: Hosted dev project** - create a Supabase dev project, `supabase db push`, point a debug build at it.
+**Task 7.2: Hosted dev project** - the project exists and is migrated (see Carried forward). Remaining: point a debug build at it.
 **Task 7.3: Multi-device run** - four simulators or devices through a full three-round game, following an updated copy of the reference `test/qa-plan.md` saved as `docs/qa-plan.md`. Include: kill and relaunch the clue-giver mid-turn, airplane-mode a guesser, host leaves, kick, late joiner, rematch.
 
 ### Phase 8: App Store
