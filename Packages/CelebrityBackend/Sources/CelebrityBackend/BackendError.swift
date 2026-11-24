@@ -180,7 +180,7 @@ public enum BackendError: Error, Sendable, Equatable, LocalizedError {
     }
 
     /// True for ``notMember``. When a refresh of the room the app is currently in fails with
-    /// this, the seat is gone (kicked, or the room was deleted). See ``GameBackend/roomLosses``.
+    /// this, the seat is gone (kicked, or the room was deleted). See ``GameBackend/observeRoom(roomID:)``.
     public var isMembershipLoss: Bool { self == .notMember }
 
     /// True for ``cancelled``. Cancellation is not a failure: do not alert.

@@ -41,38 +41,40 @@ public enum ConnectionState: Sendable, Equatable {
     public var isConnected: Bool { self == .connected }
 }
 
-/// Reported on ``GameBackend/roomLosses`` when the current room is gone for the caller.
-public struct RoomLoss: Sendable, Equatable {
-    /// Why the room was lost.
-    public enum Reason: Sendable, Equatable {
-        /// A refresh of the room failed with `not_member`: the player was kicked or removed.
-        case removed
-        /// A `room_deleted` event was seen first, so the room no longer exists.
-        case roomDeleted
-    }
+/// Why a room observation ended. Delivered as the last element of ``GameBackend/observeRoom(roomID:)``.
+public enum RoomLossReason: Sendable, Equatable {
+    /// A refresh of the room failed with `not_member`: the player was kicked or otherwise removed, or the room
+    /// no longer exists and the server cannot tell the difference. This is also what a stale persisted room id
+    /// produces on the first refresh. Alert the player and return Home.
+    case removed
+    /// A `room_deleted` event was seen first, so the room is known to be closed. Return Home.
+    case roomDeleted
+    /// The app itself left the room: ``GameBackend/leaveRoom()``, or ``GameBackend/createRoom(name:)`` /
+    /// ``GameBackend/joinRoom(code:name:)`` moved the caller into another room. Expected; do not alert.
+    case left
+    /// The session ended under the observation: ``GameBackend/deleteMyData()`` or a sign-out or session replacement.
+    /// Expected when the app caused it; otherwise treat like ``removed``.
+    case sessionEnded
+}
 
-    /// The room that was lost.
-    public var roomID: UUID
-    /// Why it was lost.
-    public var reason: Reason
-
-    /// Creates a room-loss report.
-    /// - Parameters:
-    ///   - roomID: The room that was lost.
-    ///   - reason: Why it was lost.
-    public init(roomID: UUID, reason: Reason) {
-        self.roomID = roomID
-        self.reason = reason
-    }
+/// One element of a room observation (``GameBackend/observeRoom(roomID:)``).
+public enum RoomUpdate: Sendable, Equatable {
+    /// The room's latest state.
+    case snapshot(RoomSnapshot)
+    /// The observation is over for this reason. It is always the last element; the stream finishes after it.
+    case lost(RoomLossReason)
 }
 
 /// A partial update for ``GameBackend/updateSettings(_:)``. Only non-nil fields are sent.
+///
+/// The server accepts: slips per player 1-10; turn length 30, 60 or 90 seconds; submission window 30-600 seconds;
+/// any ``SkipMode``; either value of the recommendations switch. Anything else fails with `invalid_setting`.
 public struct SettingsUpdate: Codable, Sendable, Equatable {
     /// New slips per player (1-10), or nil to leave unchanged.
     public var slipsPerPlayer: Int?
-    /// New turn length in seconds, or nil to leave unchanged.
+    /// New turn length in seconds (30, 60 or 90), or nil to leave unchanged.
     public var turnSeconds: Int?
-    /// New submission window in seconds, or nil to leave unchanged.
+    /// New submission window in seconds (30-600), or nil to leave unchanged.
     public var submissionSeconds: Int?
     /// New skip mode, or nil to leave unchanged.
     public var skipMode: SkipMode?

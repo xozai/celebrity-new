@@ -47,10 +47,26 @@ import Testing
         #expect(SettingsUpdate().isEmpty)
     }
 
-    @Test func roomLossIsValueType() {
-        let id = UUID()
-        #expect(RoomLoss(roomID: id, reason: .removed) == RoomLoss(roomID: id, reason: .removed))
-        #expect(RoomLoss(roomID: id, reason: .removed) != RoomLoss(roomID: id, reason: .roomDeleted))
+    @Test func roomUpdateIsAValueType() {
+        #expect(RoomUpdate.lost(.removed) == .lost(.removed))
+        #expect(RoomUpdate.lost(.removed) != .lost(.roomDeleted))
+        let snap = SampleScenario.make(.lobbyHost, now: Date(timeIntervalSinceReferenceDate: 1)).snapshot
+        #expect(RoomUpdate.snapshot(snap) == .snapshot(snap))
+        #expect(RoomUpdate.snapshot(snap) != .lost(.left))
+    }
+
+    @Test func nullDrawDecodesAsNil() throws {
+        let draw = try JSONDecoder().decode(Draw?.self, from: Data("null".utf8))
+        #expect(draw == nil)
+        let present = try JSONDecoder().decode(Draw?.self, from: Data(#"{"id":"11111111-1111-1111-1111-111111111111","name":"X","token":"22222222-2222-2222-2222-222222222222"}"#.utf8))
+        #expect(present?.name == "X")
+    }
+
+    @Test func heartbeatScalarDecodesWithTheSnapshotDateStrategy() throws {
+        let decoder = RoomSnapshot.makeDecoder()
+        let micro = try decoder.decode(Date.self, from: Data(#""2026-11-22T18:14:20.22535+00:00""#.utf8))
+        let whole = try decoder.decode(Date.self, from: Data(#""2026-11-22T18:14:20+00:00""#.utf8))
+        #expect(abs(micro.timeIntervalSince(whole) - 0.22535) < 0.0001)
     }
 
     @Test func connectionStateFlags() {
